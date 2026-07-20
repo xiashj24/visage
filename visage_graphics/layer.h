@@ -121,6 +121,7 @@ namespace visage {
       setDimensions(width, height);
       destroyFrameBuffer();
     }
+    bool pairedToWindow() const { return window_handle_ != nullptr; }
 
     void setWindowlessRender(int width, int height) {
       headless_render_ = true;

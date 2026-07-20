@@ -114,7 +114,8 @@ namespace visage {
   void ApplicationEditor::addToWindow(Window* window) {
     window_ = window;
 
-    Renderer::instance().initialize(window_->initWindow(), window->globalDisplay());
+    window_->makeContextCurrent();
+    Renderer::instance().initialize(window_->glProcAddressGetter());
     canvas_->pairToWindow(window_->nativeHandle(), window->clientWidth(), window->clientHeight());
     top_level_->setDpiScale(window_->dpiScale());
     top_level_->setNativeBounds(0, 0, window->clientWidth(), window->clientHeight());
@@ -127,9 +128,9 @@ namespace visage {
       canvas_->updateTime(time);
       EventManager::instance().checkEventTimers();
       drawWindow();
+      canvas_->present();
     });
 
-    drawWindow();
     drawWindow();
     redraw();
   }

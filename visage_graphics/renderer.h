@@ -22,23 +22,29 @@
 #pragma once
 
 #include "screenshot.h"
-#include "visage_utils/thread_utils.h"
-#include "windowless_context.h"
+#include "visage_utils/space.h"
+
+#include <string>
 
 namespace visage {
-  class GraphicsCallbackHandler;
-
-  class Renderer : public Thread {
+  class Renderer {
   public:
     static Renderer& instance();
 
-    Renderer();
-    ~Renderer() override;
+    Renderer() = default;
 
-    static void resetResolution(int width, int height);
+    // Loads GL through the injected getter against the caller's current GL
+    // context. The application owns that context and the buffer swap; visage
+    // never creates one. Safe to call more than once; only the first call
+    // initializes.
+    bool initialize(void* (*get_proc_address)(const char*));
 
-    void initializeWindowless() { initialize(windowlessContext(), nullptr); }
-    void initialize(void* model_window, void* display);
+    // Rendering without a window still needs a current GL context (e.g. from
+    // a hidden window); initialize() must already have run.
+    void initializeWindowless();
+
+    static void resetResolution(int width, int height) { }
+
     void setScreenshotData(const uint8_t* data, int width, int height, int pitch, bool blue_red);
     const Screenshot& screenshot() const { return screenshot_; }
 
@@ -48,17 +54,11 @@ namespace visage {
     bool initialized() const { return initialized_; }
 
   private:
-    void startRenderThread();
-    void render();
-    void run() override;
-
     bool initialized_ = false;
     bool supported_ = false;
     bool swap_chain_supported_ = false;
 
     Screenshot screenshot_;
     std::string error_message_;
-    std::atomic<bool> render_thread_started_ = false;
-    std::unique_ptr<GraphicsCallbackHandler> callback_handler_;
   };
 }

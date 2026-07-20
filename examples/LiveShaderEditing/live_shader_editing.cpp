@@ -68,7 +68,9 @@ public:
     post_effect_ = std::make_unique<visage::ShaderPostEffect>(resources::shaders::vs_custom,
                                                               resources::shaders::fs_warp);
 
-    shader_editor_.setShader(resources::shaders::fs_warp, resources::shaders::fs_warp_sc);
+    // Shaders are plain GLSL text now - the embedded file is both the
+    // compiled shader and the editable source.
+    shader_editor_.setShader(resources::shaders::fs_warp);
 
     shapes_.setPostEffect(post_effect_.get());
     addChild(&shapes_);

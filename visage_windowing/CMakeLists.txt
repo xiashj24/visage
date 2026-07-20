@@ -1,21 +1,24 @@
-if (EMSCRIPTEN)
-  file(GLOB PLATFORM_SOURCE_FILES emscripten/*.cpp)
-  file(GLOB PLATFORM_HEADER_FILES emscripten/*.h)
-elseif (WIN32)
-  file(GLOB PLATFORM_SOURCE_FILES win32/*.cpp)
-  file(GLOB PLATFORM_HEADER_FILES win32/*.h)
-  set(WIN_LIBS dxgi Shell32)
-elseif (APPLE)
-  file(GLOB PLATFORM_SOURCE_FILES macos/*.mm)
-  file(GLOB PLATFORM_HEADER_FILES macos/*.h)
-elseif (UNIX)
-  file(GLOB PLATFORM_SOURCE_FILES linux/*.cpp)
-  file(GLOB PLATFORM_HEADER_FILES linux/*.h)
+# SDL3 provides windowing on every platform (Win32/Cocoa/KMSDRM). Pinned to a
+# GitHub release source archive - not a git tag - so the version stamps as a
+# real release instead of "development-version".
+set(VISAGE_SDL3_VERSION "3.4.12" CACHE STRING "SDL3 release to fetch")
 
-  find_package(X11 REQUIRED)
-  set(X11_LIBS ${X11_LIBRARIES} ${X11_Xrandr_LIB})
-  set(X11_INCLUDES ${X11_INCLUDE_DIR} ${Xrandr_INCLUDE_DIR})
-endif ()
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/CPM.cmake)
+
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+message(STATUS "VISAGE: Downloading SDL3 ${VISAGE_SDL3_VERSION}")
+CPMAddPackage(
+  NAME SDL3
+  URL https://github.com/libsdl-org/SDL/releases/download/release-${VISAGE_SDL3_VERSION}/SDL3-${VISAGE_SDL3_VERSION}.tar.gz
+  EXCLUDE_FROM_ALL YES
+)
+
+file(GLOB PLATFORM_SOURCE_FILES sdl3/*.cpp)
+file(GLOB PLATFORM_HEADER_FILES sdl3/*.h)
 
 file(GLOB HEADERS *.h)
 file(GLOB SOURCE_FILES *.cpp)
@@ -28,12 +31,7 @@ target_include_directories(VisageWindowing
   PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${VISAGE_INCLUDE_PATH}
-  ${X11_INCLUDES}
 )
-target_link_libraries(VisageWindowing PRIVATE ${X11_LIBS} ${WIN_LIBS})
+target_link_libraries(VisageWindowing PUBLIC SDL3::SDL3-static)
 
 set_target_properties(VisageWindowing PROPERTIES FOLDER "visage")
-if (APPLE)
-  target_compile_options(VisageWindowing PRIVATE -fobjc-arc)
-endif ()
-

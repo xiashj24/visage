@@ -8,6 +8,8 @@ if (EMSCRIPTEN)
   add_compile_options(-DVISAGE_EMSCRIPTEN=1)
 elseif (WIN32)
   add_compile_options(${VISAGE_DEFINE_FLAG}VISAGE_WINDOWS=1)
+  # windows.h min/max macros break std::min/std::max in amalgamated builds.
+  add_compile_definitions(NOMINMAX)
 elseif (APPLE)
   add_compile_options(-DVISAGE_MAC=1)
 elseif (UNIX)

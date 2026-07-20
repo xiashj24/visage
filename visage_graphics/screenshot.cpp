@@ -21,18 +21,12 @@
 
 #include "screenshot.h"
 
-#include <bimg/bimg.h>
-#include <bx/file.h>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
 
 namespace visage {
   void Screenshot::save(const char* path) const {
-    bx::FileWriter writer;
-    bx::Error error;
-    if (bx::open(&writer, path, false, &error)) {
-      bimg::imageWritePng(&writer, width_, height_, width_ * 4, data_.data(),
-                          bimg::TextureFormat::RGBA8, false, &error);
-      bx::close(&writer);
-    }
+    stbi_write_png(path, width_, height_, 4, data_.data(), width_ * 4);
   }
 
   void Screenshot::save(const std::string& path) const {

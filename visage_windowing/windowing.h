@@ -99,10 +99,12 @@ namespace visage {
     virtual void* nativeHandle() const = 0;
     virtual void windowContentsResized(int width, int height) = 0;
 
-    virtual void* initWindow() const { return nullptr; }
-    virtual void* globalDisplay() const { return nullptr; }
-    virtual void processPluginFdEvents() { }
-    virtual int posixFd() const { return 0; }
+    // The application owns the GL context; these let the app layer make it
+    // current, load GL through it, and present a finished frame.
+    using GlProcAddressGetter = void* (*)(const char*);
+    virtual GlProcAddressGetter glProcAddressGetter() const { return nullptr; }
+    virtual void makeContextCurrent() { }
+    virtual void swapBuffers() { }
 
     virtual void show() = 0;
     virtual void showMaximized() = 0;

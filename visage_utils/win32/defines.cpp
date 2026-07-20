@@ -23,17 +23,25 @@
 
 #include "string_utils.h"
 
+#include <cstdio>
+
 #ifndef NOMINMAX
 #define NOMINMAX 1
 #endif
 #include <windows.h>
 
 namespace visage {
+  // Mirrored to stderr because OutputDebugString is invisible without an
+  // attached debugger, which hides real failures in normal runs.
   void debugLogString(const char* file, unsigned int line, const String& log_message) {
-    OutputDebugStringA((std::string(file) + " (" + std::to_string(line) + ") ").c_str());
+    std::string location = std::string(file) + " (" + std::to_string(line) + ") ";
+    OutputDebugStringA(location.c_str());
     OutputDebugStringW(log_message.toWide().c_str());
     if (log_message.isEmpty() || log_message[log_message.size() - 1] != '\n')
       OutputDebugStringW(L"\n");
+
+    std::fprintf(stderr, "%s%s\n", location.c_str(), log_message.toUtf8().c_str());
+    std::fflush(stderr);
   }
 
   void debugLogArgs(const char* file, unsigned int line, const char* format, va_list arg_list) {

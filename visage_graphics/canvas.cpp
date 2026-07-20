@@ -26,6 +26,7 @@
 #include "theme.h"
 
 #include <bgfx/bgfx.h>
+#include <utility>
 
 namespace visage {
   bool Canvas::swapChainSupported() {
@@ -108,6 +109,22 @@ namespace visage {
       bgfx::frame();
     }
     return submission;
+  }
+
+  void Canvas::present() {
+    if (!composite_layer_.pairedToWindow())
+      return;
+
+    int quarter_turns = screenRotationQuarterTurns(screenRotation());
+
+    // The physical drawable is the logical size with width/height swapped on
+    // quarter rotations.
+    int dst_width = composite_layer_.width();
+    int dst_height = composite_layer_.height();
+    if (quarter_turns & 1)
+      std::swap(dst_width, dst_height);
+
+    bgfx::presentFrameBuffer(composite_layer_.frameBuffer(), dst_width, dst_height, quarter_turns);
   }
 
   const Screenshot& Canvas::takeScreenshot() {

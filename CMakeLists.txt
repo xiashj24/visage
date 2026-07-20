@@ -18,9 +18,21 @@ endif ()
 
 option(VISAGE_AMALGAMATED_BUILD "Compile sources together" ON)
 option(VISAGE_ENABLE_WIDGETS "Add widgets library" ON)
-option(VISAGE_ENABLE_BACKGROUND_GRAPHICS_THREAD "Offloads graphics rendering to a background thread" OFF)
 option(VISAGE_ENABLE_GRAPHICS_DEBUG_LOGGING "Shows graphics debug log in console in debug mode" OFF)
 option(VISAGE_ADDRESS_SANITIZER "Enable AddressSanitizer" OFF)
+
+# Linux means the Raspberry Pi / KMSDRM product path, which renders with
+# OpenGL ES 3.0; Windows and macOS simulators use desktop GL core profiles.
+if (UNIX AND NOT APPLE)
+  set(VISAGE_OPENGL_ES_DEFAULT ON)
+else ()
+  set(VISAGE_OPENGL_ES_DEFAULT OFF)
+endif ()
+option(VISAGE_OPENGL_ES "Render with OpenGL ES 3.0 instead of desktop OpenGL" ${VISAGE_OPENGL_ES_DEFAULT})
+
+if (VISAGE_OPENGL_ES)
+  add_compile_definitions(VISAGE_OPENGL_ES=1)
+endif ()
 
 if (VISAGE_ADDRESS_SANITIZER)
   if (MSVC)

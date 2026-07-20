@@ -19,12 +19,17 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// Hosting visage without ApplicationWindow: the app owns the window, the GL
+// context, and the frame loop; visage renders into a canvas paired to it.
+
 #include <visage/graphics.h>
 #include <visage/windowing.h>
 
 int runExample() {
   std::unique_ptr<visage::Window> window = visage::createWindow(800, 800);
-  visage::Renderer::instance().initialize(window->initWindow(), window->globalDisplay());
+
+  window->makeContextCurrent();
+  visage::Renderer::instance().initialize(window->glProcAddressGetter());
 
   visage::Canvas canvas;
   canvas.pairToWindow(window->nativeHandle(), window->clientWidth(), window->clientHeight());
@@ -33,9 +38,12 @@ int runExample() {
   canvas.setColor(0xffaa99ff);
   canvas.ring(50, 50, window->clientWidth() - 100.0f, window->clientWidth() * 0.1f);
 
-  window->show();
-  canvas.submit();
+  window->setDrawCallback([&canvas](double time) {
+    canvas.submit();
+    canvas.present();
+  });
 
+  window->show();
   window->runEventLoop();
 
   return 0;

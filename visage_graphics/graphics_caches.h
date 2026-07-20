@@ -56,6 +56,9 @@ namespace visage {
       return instance()->shaderData(name);
     }
 
+    // GLSL compile log of the most recent failed shader creation.
+    static const char* lastError();
+
   private:
     ShaderCache();
     ~ShaderCache();

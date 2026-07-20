@@ -21,145 +21,44 @@
 
 #include "renderer.h"
 
+#include "gl/gl_api.h"
 #include "visage_utils/string_utils.h"
 
 #include <bgfx/bgfx.h>
-#include <bgfx/platform.h>
 
 namespace visage {
-  class GraphicsCallbackHandler : public bgfx::CallbackI {
-    void fatal(const char* file_path, uint16_t line, bgfx::Fatal::Enum _code, const char* error) override {
-      VISAGE_LOG(String(file_path) + String(" (") + line + String(") "));
-      VISAGE_LOG(error);
-      VISAGE_LOG("Graphics fatal error");
-      VISAGE_ASSERT(false);
-    }
-
-    void traceVargs(const char* file_path, uint16_t line, const char* format, va_list arg_list) override {
-#if VISAGE_GRAPHICS_DEBUG_LOGGING
-      visage::debugLogArgs(file_path, line, format, arg_list);
-#endif
-    }
-
-    void profilerBegin(const char*, uint32_t, const char*, uint16_t) override { }
-    void profilerBeginLiteral(const char*, uint32_t, const char*, uint16_t) override { }
-    void profilerEnd() override { }
-    uint32_t cacheReadSize(uint64_t) override { return 0; }
-    bool cacheRead(uint64_t, void*, uint32_t) override { return false; }
-    void cacheWrite(uint64_t, const void*, uint32_t) override { }
-
-    void screenShot(const char* file_path, uint32_t width, uint32_t height, uint32_t pitch,
-                    const void* data, uint32_t size, bool y_flip) override {
-      Renderer::instance().setScreenshotData(static_cast<const uint8_t*>(data), width, height, pitch, true);
-    }
-
-    void captureBegin(uint32_t, uint32_t, uint32_t, bgfx::TextureFormat::Enum, bool) override { }
-    void captureEnd() override { }
-    void captureFrame(const void*, uint32_t) override { }
-  };
-
-  static constexpr uint32_t resetFlags() {
-#if VISAGE_WINDOWS
-    return BGFX_RESET_FLIP_AFTER_RENDER;
-#elif VISAGE_MAC
-    return BGFX_RESET_FLIP_AFTER_RENDER | BGFX_RESET_VSYNC;
-#elif VISAGE_LINUX
-    return BGFX_RESET_VSYNC;
-#else
-    return 0;
-#endif
-  }
-
   Renderer& Renderer::instance() {
     static Renderer renderer;
     return renderer;
   }
 
-  Renderer::Renderer() : Thread("Renderer Thread") { }
-
-  Renderer::~Renderer() {
-    stop();
-  }
-
-  void Renderer::startRenderThread() {
-#if VISAGE_BACKGROUND_GRAPHICS_THREAD
-    start();
-    while (!render_thread_started_.load())
-      yield();
-#endif
-  }
-
-  void Renderer::run() {
-    render();
-  }
-
-  void Renderer::render() {
-    static constexpr int kRenderTimeout = 100;
-    render_thread_started_ = bgfx::renderFrame() == bgfx::RenderFrame::NoContext;
-
-    while (shouldRun())
-      bgfx::renderFrame(kRenderTimeout);
-  }
-
-  void Renderer::initialize(void* model_window, void* display) {
+  bool Renderer::initialize(void* (*get_proc_address)(const char*)) {
     if (initialized_)
-      return;
+      return supported_;
 
-    callback_handler_ = std::make_unique<GraphicsCallbackHandler>();
-    initialized_ = true;
-    startRenderThread();
-
-    bgfx::Init bgfx_init;
-    bgfx_init.resolution.numBackBuffers = 1;
-    bgfx_init.resolution.width = 0;
-    bgfx_init.resolution.height = 0;
-    bgfx_init.callback = callback_handler_.get();
-
-    bgfx_init.platformData.ndt = display;
-    bgfx_init.platformData.nwh = model_window;
-    bgfx_init.platformData.type = bgfx::NativeWindowHandleType::Default;
-
-    bgfx::RendererType::Enum supported_renderers[bgfx::RendererType::Count];
-    uint8_t num_supported = bgfx::getSupportedRenderers(bgfx::RendererType::Count, supported_renderers);
-
-#if VISAGE_WINDOWS
-    bgfx_init.type = bgfx::RendererType::Direct3D11;
-#if USE_DIRECTX12
-    for (int i = 0; i < num_supported; ++i) {
-      if (supported_renderers[i] == bgfx::RendererType::Direct3D12)
-        bgfx_init.type = bgfx::RendererType::Direct3D12;
-    }
-#endif
-#elif VISAGE_MAC
-    bgfx_init.type = bgfx::RendererType::Metal;
-    bgfx_init.resolution.width = 1;
-    bgfx_init.resolution.height = 1;
-#elif VISAGE_LINUX
-    bgfx_init.type = bgfx::RendererType::Vulkan;
-#elif VISAGE_EMSCRIPTEN
-    bgfx_init.type = bgfx::RendererType::OpenGLES;
-#endif
-
-    bgfx_init.resolution.reset = resetFlags();
-
-    for (int i = 0; i < num_supported && !supported_; ++i)
-      supported_ = supported_renderers[i] == bgfx_init.type;
-
-    if (!supported_) {
+    if (!loadGlApi(get_proc_address) || !bgfx::initGlBackend()) {
+      error_message_ = "Failed to load OpenGL 3.3 / OpenGL ES 3.0 functions.";
+      VISAGE_LOG(error_message_.c_str());
       VISAGE_ASSERT(false);
-      std::string renderer_name = bgfx::getRendererName(bgfx_init.type);
-      error_message_ = renderer_name + " is required and not supported on this computer.";
+      return false;
     }
 
-    bgfx::init(bgfx_init);
-    VISAGE_ASSERT(bgfx::getRendererType() == bgfx_init.type);
+    initialized_ = true;
+    supported_ = true;
     swap_chain_supported_ = bgfx::getCaps()->supported & BGFX_CAPS_SWAP_CHAIN;
+
+    VISAGE_LOG(String("GL_VENDOR: ") + reinterpret_cast<const char*>(gl.getString(GL_VENDOR)));
+    VISAGE_LOG(String("GL_RENDERER: ") + reinterpret_cast<const char*>(gl.getString(GL_RENDERER)));
+    VISAGE_LOG(String("GL_VERSION: ") + reinterpret_cast<const char*>(gl.getString(GL_VERSION)));
+    VISAGE_LOG(String("GL_SHADING_LANGUAGE_VERSION: ") +
+               reinterpret_cast<const char*>(gl.getString(GL_SHADING_LANGUAGE_VERSION)));
+    return true;
   }
 
-  void Renderer::resetResolution(int width, int height) {
-#if VISAGE_MAC
-    bgfx::reset(width, height, resetFlags());
-#endif
+  void Renderer::initializeWindowless() {
+    // The application must have initialized against some current GL context
+    // already - a hidden window works; visage cannot create a context itself.
+    VISAGE_ASSERT(initialized_);
   }
 
   void Renderer::setScreenshotData(const uint8_t* data, int width, int height, int pitch, bool blue_red) {

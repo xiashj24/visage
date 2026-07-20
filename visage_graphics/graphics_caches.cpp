@@ -31,6 +31,10 @@ namespace visage {
     std::map<std::string, const char*> name_lookup;
   };
 
+  const char* ShaderCache::lastError() {
+    return bgfx::lastShaderError();
+  }
+
   ShaderCache::ShaderCache() {
     cache_ = std::make_unique<ShaderCacheMap>();
   }

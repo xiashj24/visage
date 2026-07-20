@@ -66,6 +66,12 @@ namespace visage {
     void clearDrawnShapes();
     int submit(int submit_pass = 0);
 
+    // Puts the window layer's persistent framebuffer on screen as one
+    // full-screen quad, applying the renderer's screen rotation. Call once
+    // per frame after submit(), right before the buffer swap. No-op unless
+    // paired to a window.
+    void present();
+
     const Screenshot& takeScreenshot();
     const Screenshot& screenshot() const;
 

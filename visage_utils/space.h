@@ -29,6 +29,28 @@
 #include <vector>
 
 namespace visage {
+  // Whole-quarter-turn rotation between the UI's logical orientation and the
+  // physical display, for panels mounted rotated. Clockwise on screen.
+  // Global product configuration; set before creating windows.
+  enum class ScreenRotation {
+    None,
+    Rotate90,
+    Rotate180,
+    Rotate270,
+  };
+
+  void setScreenRotation(ScreenRotation rotation);
+  ScreenRotation screenRotation();
+
+  inline int screenRotationQuarterTurns(ScreenRotation rotation) {
+    switch (rotation) {
+    case ScreenRotation::Rotate90: return 1;
+    case ScreenRotation::Rotate180: return 2;
+    case ScreenRotation::Rotate270: return 3;
+    default: return 0;
+    }
+  }
+
   template<typename T>
   struct BasePoint {
     T x = 0;
