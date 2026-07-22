@@ -67,6 +67,7 @@ namespace visage {
 
   private:
     void showWindow(bool maximized);
+    bool closeRequestAllowed();
 
     IPoint initial_position_;
     Window::Decoration decoration_ = Window::Decoration::Native;

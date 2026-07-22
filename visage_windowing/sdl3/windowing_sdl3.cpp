@@ -56,6 +56,9 @@ namespace visage {
 
     void ensureSdlInitialized() {
       static bool initialized = [] {
+        // Match native windowing: the click that focuses a window is also
+        // delivered to the app.
+        SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
         if (!SDL_Init(SDL_INIT_VIDEO)) {
           VISAGE_LOG(SDL_GetError());
           VISAGE_ASSERT(false);
@@ -129,6 +132,52 @@ namespace visage {
       return KeyCode::Unknown;
     }
 
+    // Hit test for client-decorated (borderless) windows: the OS handles
+    // dragging and edge resizing, while caption buttons stay normal regions
+    // so their clicks arrive as mouse events.
+    SDL_HitTestResult clientDecorationHitTest(SDL_Window* sdl_window, const SDL_Point* area, void* data) {
+      static constexpr float kResizeBorder = 8.0f;
+
+      WindowSdl3* window = static_cast<WindowSdl3*>(data);
+      SDL_WindowFlags flags = SDL_GetWindowFlags(sdl_window);
+      if ((flags & SDL_WINDOW_RESIZABLE) && !(flags & SDL_WINDOW_MAXIMIZED)) {
+        int width = 0, height = 0;
+        SDL_GetWindowSize(sdl_window, &width, &height);
+        float density = SDL_GetWindowPixelDensity(sdl_window);
+        float scale = SDL_GetWindowDisplayScale(sdl_window);
+        float content_scale = density > 0.0f && scale > 0.0f ? scale / density : 1.0f;
+        int margin = static_cast<int>(std::round(kResizeBorder * content_scale));
+
+        bool left = area->x < margin;
+        bool right = area->x >= width - margin;
+        bool top = area->y < margin;
+        bool bottom = area->y >= height - margin;
+        if (top && left)
+          return SDL_HITTEST_RESIZE_TOPLEFT;
+        if (top && right)
+          return SDL_HITTEST_RESIZE_TOPRIGHT;
+        if (bottom && left)
+          return SDL_HITTEST_RESIZE_BOTTOMLEFT;
+        if (bottom && right)
+          return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+        if (top)
+          return SDL_HITTEST_RESIZE_TOP;
+        if (bottom)
+          return SDL_HITTEST_RESIZE_BOTTOM;
+        if (left)
+          return SDL_HITTEST_RESIZE_LEFT;
+        if (right)
+          return SDL_HITTEST_RESIZE_RIGHT;
+      }
+
+      Point point = window->physicalToLogical(area->x, area->y);
+      HitTestResult hit_test = window->handleHitTest(static_cast<int>(std::round(point.x)),
+                                                     static_cast<int>(std::round(point.y)));
+      if (hit_test == HitTestResult::TitleBar)
+        return SDL_HITTEST_DRAGGABLE;
+      return SDL_HITTEST_NORMAL;
+    }
+
     WindowSdl3* windowFromId(SDL_WindowID id) {
       auto it = g_windows.find(id);
       return it == g_windows.end() ? nullptr : it->second;
@@ -167,7 +216,7 @@ namespace visage {
   }
 
   WindowSdl3::WindowSdl3(int x, int y, int width, int height, Decoration decoration) :
-      Window(width, height), owns_window_(true) {
+      Window(width, height), owns_window_(true), decoration_(decoration) {
     ensureSdlInitialized();
     setGlContextAttributes();
 
@@ -211,6 +260,9 @@ namespace visage {
 
     makeContextCurrent();
     SDL_GL_SetSwapInterval(1);
+
+    if (decoration_ == Decoration::Client)
+      SDL_SetWindowHitTest(window_, clientDecorationHitTest, this);
 
     g_windows[SDL_GetWindowID(window_)] = this;
     updateDpiScale();
@@ -305,7 +357,10 @@ namespace visage {
       int y = static_cast<int>(std::round(point.y));
       MouseButton button = mouseButtonFromSdl(event.button.button);
       int button_state = mouseButtonStateFromSdl(SDL_GetMouseState(nullptr, nullptr));
-      if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+      bool mouse_down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+      if (button == kMouseButtonLeft && handleDecorationClick(mouse_down, x, y))
+        break;
+      if (mouse_down)
         handleMouseDown(button, x, y, button_state, currentModifiers());
       else
         handleMouseUp(button, x, y, button_state, currentModifiers());
@@ -391,6 +446,49 @@ namespace visage {
     default:
       break;
     }
+  }
+
+  // SDL has no hit-test regions for caption buttons, so their clicks arrive
+  // as plain mouse events; perform the window actions a native title bar
+  // would. Returns true when the event was consumed by a button.
+  bool WindowSdl3::handleDecorationClick(bool mouse_down, int x, int y) {
+    if (decoration_ != Decoration::Client)
+      return false;
+
+    HitTestResult hit_test = handleHitTest(x, y);
+    bool on_button = hit_test == HitTestResult::CloseButton ||
+                     hit_test == HitTestResult::MaximizeButton ||
+                     hit_test == HitTestResult::MinimizeButton;
+    if (mouse_down) {
+      pressed_decoration_button_ = on_button ? hit_test : HitTestResult::Client;
+      return on_button;
+    }
+
+    HitTestResult pressed = pressed_decoration_button_;
+    pressed_decoration_button_ = HitTestResult::Client;
+    if (pressed == HitTestResult::Client)
+      return false;
+    if (hit_test != pressed)
+      return true;
+
+    switch (hit_test) {
+    case HitTestResult::CloseButton:
+      if (handleCloseRequested())
+        close();
+      break;
+    case HitTestResult::MaximizeButton:
+      if (SDL_GetWindowFlags(window_) & SDL_WINDOW_MAXIMIZED)
+        SDL_RestoreWindow(window_);
+      else
+        SDL_MaximizeWindow(window_);
+      break;
+    case HitTestResult::MinimizeButton:
+      SDL_MinimizeWindow(window_);
+      break;
+    default:
+      break;
+    }
+    return true;
   }
 
   void WindowSdl3::runFrame(double time) {

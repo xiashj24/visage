@@ -95,13 +95,18 @@ namespace visage {
     showWindow(true);
   }
 
+  // An empty close-request list means closing is always allowed.
+  bool ApplicationWindow::closeRequestAllowed() {
+    return onCloseRequested().isEmpty() || onCloseRequested().callback();
+  }
+
   void ApplicationWindow::hide() {
-    if (window_ && onCloseRequested().callback())
+    if (window_ && closeRequestAllowed())
       return window_->hide();
   }
 
   void ApplicationWindow::close() {
-    if (window_ && onCloseRequested().callback()) {
+    if (window_ && closeRequestAllowed()) {
       removeFromWindow();
       window_ = nullptr;
     }

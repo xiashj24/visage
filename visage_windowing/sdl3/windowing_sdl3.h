@@ -77,9 +77,12 @@ namespace visage {
     void updateClientSize();
     void updateDpiScale();
     void checkTextInput();
+    bool handleDecorationClick(bool mouse_down, int x, int y);
 
     SDL_Window* window_ = nullptr;
     bool owns_window_ = false;
+    Decoration decoration_ = Decoration::Native;
+    HitTestResult pressed_decoration_button_ = HitTestResult::Client;
     bool fixed_aspect_ratio_ = false;
     float aspect_ratio_ = 1.0f;
   };
