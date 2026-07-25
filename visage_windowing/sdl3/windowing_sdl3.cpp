@@ -34,21 +34,32 @@ namespace visage {
     bool g_quit_event_loop = false;
     std::vector<std::string> g_drag_files;
 
-    void setGlContextAttributes() {
+    // visage's own shaders only need 330 core / 300 es, but compute shaders
+    // (GL 4.3 / GLES 3.1) let an application run GPU kernels in the shared
+    // context, so ask for those first. Apple's GL stops at 4.1 and has no
+    // compute, so there is nothing to gain there.
+#if VISAGE_OPENGL_ES
+    constexpr int kPreferredGlMajor = 3, kPreferredGlMinor = 1;
+    constexpr int kMinimumGlMajor = 3, kMinimumGlMinor = 0;
+#elif defined(__APPLE__)
+    constexpr int kPreferredGlMajor = 3, kPreferredGlMinor = 2;
+    constexpr int kMinimumGlMajor = 3, kMinimumGlMinor = 2;
+#else
+    constexpr int kPreferredGlMajor = 4, kPreferredGlMinor = 3;
+    constexpr int kMinimumGlMajor = 3, kMinimumGlMinor = 3;
+#endif
+
+    void setGlContextAttributes(int major, int minor) {
 #if VISAGE_OPENGL_ES
       SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-#elif defined(__APPLE__)
-      SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
-      SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
 #else
-      SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+#if defined(__APPLE__)
+      SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
 #endif
+      SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+#endif
+      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, major);
+      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, minor);
       SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
       SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
       SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
@@ -218,7 +229,7 @@ namespace visage {
   WindowSdl3::WindowSdl3(int x, int y, int width, int height, Decoration decoration) :
       Window(width, height), owns_window_(true), decoration_(decoration) {
     ensureSdlInitialized();
-    setGlContextAttributes();
+    setGlContextAttributes(kPreferredGlMajor, kPreferredGlMinor);
 
     SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE |
                             SDL_WINDOW_HIGH_PIXEL_DENSITY;
@@ -252,6 +263,10 @@ namespace visage {
   void WindowSdl3::initialize() {
     if (g_gl_context == nullptr) {
       g_gl_context = SDL_GL_CreateContext(window_);
+      if (g_gl_context == nullptr) {
+        setGlContextAttributes(kMinimumGlMajor, kMinimumGlMinor);
+        g_gl_context = SDL_GL_CreateContext(window_);
+      }
       if (g_gl_context == nullptr) {
         VISAGE_LOG(SDL_GetError());
         VISAGE_ASSERT(false);
