@@ -39,5 +39,11 @@ foreach (EXAMPLE ${EXAMPLES})
       EmbeddedIconResources
       EmbeddedImageResources
     )
+
+    # AudioVisualizer drives its own GL and audio, so it needs SDL3 headers
+    # directly rather than through visage.
+    if (EXAMPLE STREQUAL "AudioVisualizer")
+      target_link_libraries(Example${EXAMPLE} PRIVATE SDL3::SDL3-static)
+    endif ()
   endif ()
 endforeach ()
