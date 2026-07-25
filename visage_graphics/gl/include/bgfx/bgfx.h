@@ -225,9 +225,11 @@ namespace bgfx {
   // Draws a window framebuffer's texture into the default framebuffer as one
   // full-screen quad, rotated by `rotation_quarter_turns` (0-3, clockwise).
   // Call once per frame right before the buffer swap; the destination size is
-  // the physical drawable size in pixels.
+  // the physical drawable size in pixels. With `blend`, the quad composites
+  // over whatever is already in the default framebuffer instead of replacing
+  // it, so an application can draw its own content underneath.
   void presentFrameBuffer(FrameBufferHandle handle, uint16_t dst_width, uint16_t dst_height,
-                          int rotation_quarter_turns);
+                          int rotation_quarter_turns, bool blend = false);
 
   // Compile log of the most recent failed createShader(), for live editing.
   const char* lastShaderError();

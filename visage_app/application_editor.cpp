@@ -128,10 +128,16 @@ namespace visage {
       canvas_->updateTime(time);
       EventManager::instance().checkEventTimers();
       drawWindow();
+      on_draw_background_.callback();
       canvas_->present();
     });
 
     drawWindow();
+    redraw();
+  }
+
+  void ApplicationEditor::setTransparentBackground(bool transparent) {
+    canvas_->setTransparentBackground(transparent);
     redraw();
   }
 

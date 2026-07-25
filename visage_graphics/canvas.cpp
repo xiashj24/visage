@@ -124,7 +124,8 @@ namespace visage {
     if (quarter_turns & 1)
       std::swap(dst_width, dst_height);
 
-    bgfx::presentFrameBuffer(composite_layer_.frameBuffer(), dst_width, dst_height, quarter_turns);
+    bgfx::presentFrameBuffer(composite_layer_.frameBuffer(), dst_width, dst_height, quarter_turns,
+                             transparent_background_);
   }
 
   const Screenshot& Canvas::takeScreenshot() {

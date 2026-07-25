@@ -320,7 +320,7 @@ namespace visage {
     if (bgfx::isValid(frame_buffer_data_->handle))
       bgfx::setViewFrameBuffer(submit_pass, frame_buffer_data_->handle);
 
-    if (intermediate_layer_ && backdrop_count == 0)
+    if ((intermediate_layer_ || clears_background_) && backdrop_count == 0)
       clearInvalidRectAreas(submit_pass);
 
     while (!region_positions.empty()) {

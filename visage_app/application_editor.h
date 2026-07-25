@@ -56,6 +56,15 @@ namespace visage {
     auto& onCloseRequested() { return on_close_requested_; }
     auto& onWindowContentsResized() { return on_window_contents_resized_; }
 
+    // Runs each frame after the UI is drawn and before it is composited into
+    // the window, for an application rendering its own content underneath.
+    // Only visible with setTransparentBackground(true).
+    auto& onDrawBackground() { return on_draw_background_; }
+
+    // Makes areas the UI does not cover transparent so the window shows what
+    // onDrawBackground() rendered.
+    void setTransparentBackground(bool transparent);
+
     void notifyContentsResized();
     const Screenshot& takeScreenshot();
     void setCanvasDetails();
@@ -117,6 +126,7 @@ namespace visage {
     CallbackList<void()> on_hide_;
     CallbackList<bool()> on_close_requested_;
     CallbackList<void()> on_window_contents_resized_;
+    CallbackList<void()> on_draw_background_;
 
     float fixed_aspect_ratio_ = 0.0f;
     float min_width_ = 0.0f;

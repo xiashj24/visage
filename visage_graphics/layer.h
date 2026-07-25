@@ -51,6 +51,11 @@ namespace visage {
     int submit(int submit_pass, int backdrop_count);
 
     void setIntermediateLayer(bool intermediate_layer) { intermediate_layer_ = intermediate_layer; }
+
+    // Clears redrawn areas to transparent first, so pixels no region covers
+    // stay empty. Intermediate layers always do this; a window layer needs it
+    // only when it composites over other content.
+    void setClearsBackground(bool clears_background) { clears_background_ = clears_background; }
     void addRegion(Region* region);
     void removeRegion(const Region* region) {
       auto it = std::find(regions_.begin(), regions_.end(), region);
@@ -147,6 +152,7 @@ namespace visage {
     int height_ = 0;
     double render_time_ = 0.0;
     bool intermediate_layer_ = false;
+    bool clears_background_ = false;
 
     void* window_handle_ = nullptr;
     bool headless_render_ = false;

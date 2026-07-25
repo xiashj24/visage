@@ -921,7 +921,7 @@ void main() {
   }
 
   void presentFrameBuffer(FrameBufferHandle handle, uint16_t dst_width, uint16_t dst_height,
-                          int rotation_quarter_turns) {
+                          int rotation_quarter_turns, bool blend) {
     if (!isValid(handle) || !initPresentResources())
       return;
 
@@ -947,7 +947,12 @@ void main() {
     gl.bindFramebuffer(GL_FRAMEBUFFER, 0);
     gl.viewport(0, 0, dst_width, dst_height);
     gl.colorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    gl.blendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
+    // Layer contents are premultiplied by BlendMode::Alpha, so compositing
+    // over the target is ONE / INV_SRC_ALPHA.
+    if (blend)
+      gl.blendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    else
+      gl.blendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
     gl.blendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
 
     gl.useProgram(g_state.present_program);

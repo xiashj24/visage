@@ -72,6 +72,15 @@ namespace visage {
     // paired to a window.
     void present();
 
+    // Leaves pixels no region drew transparent and composites the finished
+    // frame over the window's existing contents, so an application can render
+    // its own content underneath between submit() and present().
+    void setTransparentBackground(bool transparent) {
+      transparent_background_ = transparent;
+      composite_layer_.setClearsBackground(transparent);
+    }
+    bool transparentBackground() const { return transparent_background_; }
+
     const Screenshot& takeScreenshot();
     const Screenshot& screenshot() const;
 
@@ -826,6 +835,7 @@ namespace visage {
     std::vector<Layer*> layers_;
 
     float refresh_time_ = 0.0f;
+    bool transparent_background_ = false;
 
     VISAGE_LEAK_CHECKER(Canvas)
   };
