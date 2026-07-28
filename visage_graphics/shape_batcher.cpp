@@ -258,6 +258,12 @@ namespace visage {
                    quad.y + quad.height + text_block.y > clamp.top;
           };
 
+          // Only the overlapping glyphs get vertices, and numTextPieces sized
+          // the buffer to match, so anything below must count them the same way.
+          int num_pieces = std::count_if(text_block.quads.begin(), text_block.quads.end(), overlaps);
+          if (num_pieces == 0)
+            continue;
+
           ClampBounds positioned_clamp = clamp.withOffset(batch.x, batch.y);
           float direction_x = 1.0f;
           float direction_y = 0.0f;
@@ -292,8 +298,9 @@ namespace visage {
           }
 
           PackedBrush::setVertexGradientPositions(text_block.brush, vertices + vertex_index,
-                                                  length * kVerticesPerQuad, x, y, batch.x, batch.y,
-                                                  x + text_block.width, y + text_block.height);
+                                                  num_pieces * kVerticesPerQuad, x, y, batch.x,
+                                                  batch.y, x + text_block.width,
+                                                  y + text_block.height);
 
           for (int i = 0; i < length; ++i) {
             if (!overlaps(text_block.quads[i]))

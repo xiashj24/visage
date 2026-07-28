@@ -287,15 +287,30 @@ counter-clockwise.
   embedded raw `.glsl`, which the gpu backend rejects, so every example using
   a custom shader rendered black. `ShaderTexture` was entirely blank and
   `LiveShaderEditing` lost its preview pane.
-- **`PostEffects` crashes on a resize to a portrait window** — a single
-  `SetWindowPos` to 500x800 is enough, and it reproduces identically on the
-  **gl** backend (`0xC0000005`, sometimes `0xC0000374` heap corruption). Not a
-  port regression; `Bloom` survives the same resize, so it is not the shared
-  downsample chain. Untriaged.
+- **`PostEffects` crashed on a resize narrower than 600px** — a heap overflow
+  in `submitText`, on the **gl** backend too, so it predates the port. Fixed;
+  see below.
 - **`ShaderTexture` never animated, on either backend.** `ShaderQuad::draw`
   re-invalidates itself, but the texture and tints are written from the
   application's `onDraw`, which nothing re-invalidated — so the shader re-ran
   every frame on a frozen signal. Fixed in the example.
+
+### The text overflow the resize test found
+
+`numTextPieces` sizes the vertex buffer from the glyphs that overlap an
+invalid rect, and the write loop advances `vertex_index` for exactly those —
+but it handed `setVertexGradientPositions` the block's *whole* glyph count. Any
+partially clipped text block therefore wrote past the allocation.
+
+`PostEffects` reaches it because its own `resized()` puts the 300px backdrop
+frame at `x = (width - 600) / 4`, so a client narrower than 600px pushes it off
+the left edge and clips the labels behind it. Narrow, not portrait: 900x300
+leaves `y` negative and does not crash, and the boundary is sharp at 600.
+
+Nothing asserted, because `VISAGE_ASSERT(vertex_index == total_length *
+kVerticesPerQuad)` at the end of `submitText` checks the counter, which was
+always right — the overwrite came from a separate length argument. ASan named
+it in one run.
 
 ### Decisions taken
 
