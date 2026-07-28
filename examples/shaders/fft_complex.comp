@@ -1,0 +1,115 @@
+#version 450
+
+// GPU FFT for the AudioVisualizer example, from xlib's shaders/src — the
+// straightforward variant: a full 1024-point COMPLEX FFT per channel with
+// imaginary input = 0. Simpler than the real-to-complex packed kernel
+// (fft_r2c.comp) but does ~2x the work
+// and uses 16 KB of shared memory instead of 8 KB. Kept side-by-side so the two
+// approaches can be compared (see the Visualizer panel's GPU kernel selector).
+//
+// One workgroup, 512 threads. Each thread runs one radix-2 DIT butterfly per
+// stage for BOTH stereo channels in lockstep, so a single invocation owns each
+// output texel of the RG32F audio texture (.x = left, .y = right). The whole
+// transform stays in shared memory across all 10 radix stages in one dispatch.
+// Output matches the example's CPU FFT (same Hann window, norm_factor, power-dB
+// mapping and attack/release smoothing) so the backends produce identical
+// results.
+//
+// Resource binding follows SDL_GPU's compute model: set 0 = read-only storage
+// buffer, set 1 = read-write storage texture then read-write storage buffer,
+// set 2 = uniform buffer. Identical to fft_r2c.comp.
+
+layout(local_size_x = 512) in;
+
+const uint  N        = 1024u;  // FFT size / FftSize
+const uint  HALF     = 512u;   // N/2 = TexWidth = thread count
+const float PI       = 3.14159265358979323846;
+const float INV_LN10 = 0.43429448190325176;  // 1 / ln(10), for log10 via log
+
+layout(set = 0, binding = 0, std430) readonly buffer InputSamples {
+  float in_samples[];  // L block [0,N), then R block [N,2N); time-ordered
+};
+layout(set = 1, binding = 0, rg32f) uniform writeonly image2D u_out;
+layout(set = 1, binding = 1, std430) buffer EnvelopeState { float env[]; };
+layout(set = 2, binding = 0) uniform Params {
+  float norm_factor;
+  float db_floor;
+  float attack;
+  float release;
+};
+
+shared vec2 shL[1024];
+shared vec2 shR[1024];
+
+vec2 cmul(vec2 a, vec2 b) {
+  return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+// Periodic Hann, matching the example's CPU path: 0.5 * (1 - cos(2*pi*n/N)).
+float hann(uint n) {
+  return 0.5 * (1.0 - cos(2.0 * PI * float(n) / float(N)));
+}
+
+// Load sample k of both channels into shared memory at its bit-reversed slot,
+// Hann-windowed, imaginary part 0 (DIT wants bit-reversed input order).
+void load(uint k) {
+  float w = hann(k);
+  uint rev = bitfieldReverse(k) >> 22;  // reverse the low 10 bits (log2 N = 10)
+  shL[rev] = vec2(in_samples[k] * w, 0.0);
+  shR[rev] = vec2(in_samples[N + k] * w, 0.0);
+}
+
+// 0..1 spectrum value for one complex bin, reproducing the CPU mapping.
+float spectrum_value(vec2 bin, uint env_index) {
+  float mag = length(bin) * norm_factor;
+  float db = 10.0 * log(mag * mag + 1e-30) * INV_LN10;
+  float target = clamp((db + db_floor) / db_floor, 0.0, 1.0);
+  float prev = env[env_index];
+  float alpha = target > prev ? attack : release;  // fast attack, slow release
+  float val = prev + (target - prev) * alpha;
+  env[env_index] = val;
+  return val;
+}
+
+void main() {
+  uint tid = gl_LocalInvocationID.x;  // 0..511
+
+  load(tid);
+  load(tid + HALF);
+  barrier();
+
+  // 10 radix-2 DIT stages. Each thread does one butterfly per stage.
+  for (uint s = 0u; s < 10u; ++s) {
+    uint half_m = 1u << s;   // 1, 2, ..., 512
+    uint m = half_m << 1u;   // 2, 4, ..., 1024
+    uint grp = tid / half_m;
+    uint pos = tid % half_m;
+    uint i0 = (grp * m) + pos;
+    uint i1 = i0 + half_m;
+    float ang = -2.0 * PI * float(pos) / float(m);
+    vec2 tw = vec2(cos(ang), sin(ang));
+
+    vec2 al = shL[i0];
+    vec2 bl = cmul(shL[i1], tw);
+    shL[i0] = al + bl;
+    shL[i1] = al - bl;
+
+    vec2 ar = shR[i0];
+    vec2 br = cmul(shR[i1], tw);
+    shR[i0] = ar + br;
+    shR[i1] = ar - br;
+    barrier();
+  }
+
+  // Output. Thread tid owns texel column `tid` (one of HALF = 512 bins).
+  uint bin = tid;
+  float specL = spectrum_value(shL[bin], bin);
+  float specR = spectrum_value(shR[bin], HALF + bin);
+  imageStore(u_out, ivec2(int(bin), 0), vec4(specL, specR, 0.0, 0.0));
+
+  // Row 1 = raw waveform: the latest HALF samples (tail of the time-ordered
+  // window), unwindowed, exactly as the CPU stores them.
+  float waveL = in_samples[HALF + bin];
+  float waveR = in_samples[N + HALF + bin];
+  imageStore(u_out, ivec2(int(bin), 1), vec4(waveL, waveR, 0.0, 0.0));
+}

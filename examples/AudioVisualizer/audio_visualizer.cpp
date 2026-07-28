@@ -20,15 +20,19 @@
  */
 
 // visage as an overlay: the application draws an audio visualizer into the
-// window with its own GL programs - including the FFT, as a compute shader
-// where the context has them - and visage composites its UI on top.
+// window with programs of its own - including the FFT, as a compute shader
+// where the device has them - and visage composites its UI on top.
 //
-// The two pieces that make that work:
+// The three pieces that make that work:
 //   setTransparentBackground(true)  areas the UI does not cover stay empty and
 //                                   the finished frame composites over the
 //                                   window instead of replacing it
 //   onDrawBackground()              runs after the UI is drawn and before it
 //                                   goes on screen; the visualizer draws there
+//   windowRenderTarget()            what to draw into: the swapchain texture
+//                                   and command buffer on SDL_GPU, and just a
+//                                   size on OpenGL, where the visualizer binds
+//                                   the default framebuffer itself
 //
 // The visualizer never touches visage's renderer, and visage never learns the
 // visualizer exists.
@@ -44,7 +48,6 @@
 
 namespace {
   constexpr float kPanelWidth = 300.0f;
-  constexpr float kPanelHeight = 278.0f;
   constexpr float kRowHeight = 26.0f;
   constexpr float kMargin = 14.0f;
   constexpr float kButtonGap = 8.0f;
@@ -79,6 +82,18 @@ public:
       addChild(button);
     }
 
+    // One button per kernel, when the backend has more than one to compare.
+    for (int i = 0; visualizer_.kernelCount() > 1 && i < visualizer_.kernelCount(); ++i) {
+      auto button = std::make_unique<visage::UiButton>(visualizer_.kernelName(i));
+      button->setFont(button_font);
+      button->onToggle() += [this, i](visage::Button*, bool) {
+        visualizer_.setKernel(i);
+        refreshButtons();
+      };
+      addChild(button.get());
+      kernel_buttons_.push_back(std::move(button));
+    }
+
     cpu_button_.onToggle() += [this](visage::Button*, bool) {
       visualizer_.setBackend(viz::Visualizer::Backend::Cpu);
       refreshButtons();
@@ -107,6 +122,10 @@ public:
     gpu_button_.setActionButton(visualizer_.backend() == viz::Visualizer::Backend::Gpu);
     device_button_.setActionButton(audio_.source() == viz::AudioInput::Source::Device);
     signal_button_.setActionButton(audio_.source() == viz::AudioInput::Source::TestSignal);
+    for (size_t i = 0; i < kernel_buttons_.size(); ++i) {
+      kernel_buttons_[i]->setActive(visualizer_.gpuAvailable());
+      kernel_buttons_[i]->setActionButton(visualizer_.kernel() == static_cast<int>(i));
+    }
     redraw();
   }
 
@@ -118,7 +137,30 @@ public:
     row += kRowHeight + kButtonGap;
     device_button_.setBounds(kMargin, row, button_width, kRowHeight);
     signal_button_.setBounds(kMargin + button_width + kButtonGap, row, button_width, kRowHeight);
+
+    if (!kernel_buttons_.empty()) {
+      row += kRowHeight + kButtonGap;
+      float count = kernel_buttons_.size();
+      float kernel_width = (width() - kMargin * 2.0f - kButtonGap * (count - 1.0f)) / count;
+      for (size_t i = 0; i < kernel_buttons_.size(); ++i) {
+        kernel_buttons_[i]->setBounds(kMargin + (kernel_width + kButtonGap) * i, row, kernel_width,
+                                      kRowHeight);
+      }
+    }
+
     measure_button_.setBounds(kMargin, height() - kMargin - kRowHeight, width() - kMargin * 2.0f, kRowHeight);
+  }
+
+  // Where the readouts start: below the two or three rows of buttons.
+  float readingsTop() const {
+    return kMargin + 48.0f + (kRowHeight + kButtonGap) * (kernel_buttons_.empty() ? 2.0f : 3.0f) + 6.0f;
+  }
+
+  // Tall enough for the readings this backend has: one row per kernel it can
+  // time, which is none on OpenGL.
+  float preferredHeight() const {
+    float readings = 80.0f + 20.0f * static_cast<float>(kernel_buttons_.size());
+    return readingsTop() + readings + kButtonGap + kRowHeight + kMargin;
   }
 
   void draw(visage::Canvas& canvas) override {
@@ -136,7 +178,7 @@ public:
     canvas.text(visualizer_.status(), font_, visage::Font::kLeft, kMargin, kMargin + 21.0f, text_width, 18);
 
     char text[80];
-    float row = kMargin + 48.0f + (kRowHeight + kButtonGap) * 2.0f + 6.0f;
+    float row = readingsTop();
     canvas.setColor(0xffffffff);
     std::snprintf(text, sizeof(text), "%.0f FPS", static_cast<double>(frames_per_second_));
     canvas.text(text, font_, visage::Font::kLeft, kMargin, row, text_width, 18);
@@ -149,6 +191,18 @@ public:
     row += 20.0f;
     drawReading(canvas, row, "GPU analysis",
                 microsecondText(visualizer_.gpuMicros(), visualizer_.gpuMeasured()));
+
+    // Kernel time is the GPU's own, fenced: what the transform costs, as
+    // opposed to what running it costs this thread.
+    for (int i = 0; i < visualizer_.kernelCount(); ++i) {
+      double micros = visualizer_.kernelMicros(i);
+      if (micros < 0.0)
+        continue;
+
+      row += 20.0f;
+      canvas.setColor(0xffaab4cc);
+      drawReading(canvas, row, visualizer_.kernelName(i), microsecondText(micros, true));
+    }
 
     row += 20.0f;
     if (visualizer_.cpuMeasured() && visualizer_.gpuMeasured()) {
@@ -180,6 +234,7 @@ private:
   visage::UiButton device_button_;
   visage::UiButton signal_button_;
   visage::UiButton measure_button_;
+  std::vector<std::unique_ptr<visage::UiButton>> kernel_buttons_;
   visage::Font title_font_;
   visage::Font font_;
   float frames_per_second_ = 0.0f;
@@ -202,10 +257,10 @@ public:
     visualizer_.shutdown();
   }
 
-  // Call once the window is showing: its GL context is current by then, so the
-  // visualizer can resolve entry points and build its programs.
+  // Call once the window is showing: the renderer exists by then, so the
+  // visualizer can build its programs against it.
   bool initializeVisualizer() {
-    if (!viz::loadGlProcs(window()->glProcAddressGetter()) || !visualizer_.initialize()) {
+    if (!visualizer_.initialize(window())) {
       VISAGE_LOG(visualizer_.status().c_str());
       return false;
     }
@@ -226,13 +281,12 @@ public:
 
   void resized() override {
     if (panel_)
-      panel_->setBounds(width() - kPanelWidth - 24.0f, 24.0f, kPanelWidth, kPanelHeight);
+      panel_->setBounds(width() - kPanelWidth - 24.0f, 24.0f, kPanelWidth, panel_->preferredHeight());
   }
 
 private:
   // Runs after visage has drawn its frame and before it is composited into the
-  // window. A layer framebuffer is still bound, so the visualizer binds the
-  // default framebuffer itself.
+  // window, so the visualizer draws underneath it.
   void drawVisualizer() {
     if (!ready_)
       return;
@@ -240,7 +294,7 @@ private:
     double now = seconds();
     audio_.update(now - last_time_);
     last_time_ = now;
-    visualizer_.render(nativeWidth(), nativeHeight(), static_cast<float>(now));
+    visualizer_.render(windowRenderTarget(), static_cast<float>(now));
 
     frame_count_++;
     if (now - last_fps_time_ >= 0.5) {

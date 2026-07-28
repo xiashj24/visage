@@ -32,13 +32,22 @@ set(SKIPPED_EXAMPLES ClapPlugin Benchmark)
 
 if (VISAGE_SDL_GPU)
   # LiveShaderEditing recompiles GLSL at runtime, which only the gl backend
-  # can do. AudioVisualizer drives GL compute directly; it is ported in phase 4.
-  list(APPEND SKIPPED_EXAMPLES LiveShaderEditing AudioVisualizer)
+  # can do.
+  list(APPEND SKIPPED_EXAMPLES LiveShaderEditing)
 endif ()
 
 foreach (EXAMPLE ${EXAMPLES})
   file(GLOB SOURCE_FILES ${EXAMPLE}/*.cpp)
   file(GLOB HEADER_FILES ${EXAMPLE}/*.h)
+
+  # AudioVisualizer renders its own content under the UI, which each backend
+  # does differently; only one of its two implementations belongs in a build.
+  if (VISAGE_SDL_GPU)
+    list(FILTER SOURCE_FILES EXCLUDE REGEX "visualizer_gl\\.cpp$|gl_procs\\.cpp$")
+    list(FILTER HEADER_FILES EXCLUDE REGEX "gl_procs\\.h$")
+  else ()
+    list(FILTER SOURCE_FILES EXCLUDE REGEX "visualizer_gpu\\.cpp$")
+  endif ()
 
   if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${EXAMPLE}" AND SOURCE_FILES AND NOT EXAMPLE IN_LIST SKIPPED_EXAMPLES)
     add_executable(Example${EXAMPLE} main.cpp ${SOURCE_FILES} ${HEADER_FILES})

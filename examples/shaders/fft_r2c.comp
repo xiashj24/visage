@@ -1,0 +1,137 @@
+#version 450
+
+// GPU FFT for the AudioVisualizer example, from xlib's shaders/src. Not a
+// visage shader: the example drives SDL_GPU itself, so shadertool compiles
+// this verbatim with no preamble and the example owns the descriptor layout.
+//
+// Real-to-complex packing, the way VkFFT handles real input: each channel's
+// 1024 real samples are packed into a 512-point COMPLEX sequence
+// (z[n] = x[2n] + i*x[2n+1]), transformed with ONE 512-pt radix-2 FFT, then a
+// split / post-processing step recovers the 1024-pt real-FFT bins from the
+// half-length spectrum's Hermitian structure. This halves both the transform
+// size and the shared memory (8 KB) versus a full 1024-pt complex FFT.
+//
+//   E[k] = (Z[k] + conj(Z[M-k])) / 2          (FFT of the even samples)
+//   O[k] = (Z[k] - conj(Z[M-k])) / (2i)       (FFT of the odd samples)
+//   X[k] = E[k] + W_N^k * O[k],  W_N^k = exp(-2*pi*i*k/N),  k = 0..M-1
+//
+// One workgroup, 512 threads. Both stereo channels share one shared array
+// (L in [0,M), R in [M,2M)); the 256 butterflies of each channel's 512-pt FFT
+// are split across the 512 threads (0..255 -> L, 256..511 -> R). Output is
+// identical to the example's CPU FFT (same Hann window, norm_factor, power-dB
+// mapping and fast-attack / slow-release smoothing) so the two backends match.
+//
+// Resource binding follows SDL_GPU's compute model: set 0 = read-only storage
+// buffer, set 1 = read-write storage texture then read-write storage buffer,
+// set 2 = uniform buffer.
+
+layout(local_size_x = 512) in;
+
+const uint  N        = 1024u;  // real samples per channel (FftSize)
+const uint  M        = 512u;   // packed complex length = N/2 = bins (TexWidth)
+const float PI       = 3.14159265358979323846;
+const float INV_LN10 = 0.43429448190325176;  // 1 / ln(10), for log10 via log
+
+// set 0: read-only storage buffer — 2*N time-ordered raw samples
+// (L block [0,N), then R block [N,2N)), oldest -> newest.
+layout(set = 0, binding = 0, std430) readonly buffer InputSamples {
+  float in_samples[];
+};
+
+// set 1: read-write storage texture (the audio texture; we only write it) and
+// read-write storage buffer (persistent smoothed spectrum: L [0,M), R [M,2M)).
+layout(set = 1, binding = 0, rg32f) uniform writeonly image2D u_out;
+layout(set = 1, binding = 1, std430) buffer EnvelopeState { float env[]; };
+
+// set 2: uniform buffer (matches the C++ ComputeParams, std140, 16 bytes).
+layout(set = 2, binding = 0) uniform Params {
+  float norm_factor;
+  float db_floor;
+  float attack;
+  float release;
+};
+
+// Packed 512-pt complex spectra for both channels: L in [0,M), R in [M,2M).
+shared vec2 z[1024];
+
+vec2 cmul(vec2 a, vec2 b) {
+  return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+// Periodic Hann, matching the example's CPU path: 0.5 * (1 - cos(2*pi*n/N)).
+float hann(uint n) {
+  return 0.5 * (1.0 - cos(2.0 * PI * float(n) / float(N)));
+}
+
+// 0..1 spectrum value for one complex bin, reproducing the CPU mapping.
+float spectrum_value(vec2 bin, uint env_index) {
+  float mag = length(bin) * norm_factor;
+  float db = 10.0 * log(mag * mag + 1e-30) * INV_LN10;
+  float target = clamp((db + db_floor) / db_floor, 0.0, 1.0);
+  float prev = env[env_index];
+  float alpha = target > prev ? attack : release;  // fast attack, slow release
+  float val = prev + (target - prev) * alpha;
+  env[env_index] = val;
+  return val;
+}
+
+// Recover one 1024-pt real-FFT bin k (0..M-1) from the natural-order 512-pt
+// complex spectrum of the packed signal stored at z[base + .].
+vec2 recover_bin(uint base, uint k) {
+  uint mk = (M - k) & (M - 1u);                      // (M - k) mod M
+  vec2 zk = z[base + k];
+  vec2 zmk = vec2(z[base + mk].x, -z[base + mk].y);  // conj(Z[M-k])
+  vec2 e = 0.5 * (zk + zmk);                         // even-sample FFT
+  vec2 d = 0.5 * (zk - zmk);
+  vec2 o = vec2(d.y, -d.x);                          // (Zk - conj)/(2i) = -i*d
+  float ang = -PI * float(k) / float(M);             // -2*pi*k/N
+  vec2 w = vec2(cos(ang), sin(ang));
+  return e + cmul(w, o);
+}
+
+void main() {
+  uint tid = gl_LocalInvocationID.x;  // 0..511
+
+  // Pack z[n] = x[2n] + i*x[2n+1] for each channel, Hann-windowed, stored at
+  // the bit-reversed index (DIT wants bit-reversed input order; M = 2^9).
+  uint rev = bitfieldReverse(tid) >> 23;
+  float w0 = hann(2u * tid);
+  float w1 = hann((2u * tid) + 1u);
+  z[rev] = vec2(in_samples[2u * tid] * w0, in_samples[(2u * tid) + 1u] * w1);
+  z[M + rev] = vec2(in_samples[N + (2u * tid)] * w0,
+                    in_samples[N + (2u * tid) + 1u] * w1);
+  barrier();
+
+  // 512-pt radix-2 DIT FFT for both channels: 0..255 -> L, 256..511 -> R.
+  uint base = (tid < 256u) ? 0u : M;
+  uint bf = tid & 255u;  // butterfly index 0..255 within this channel
+  for (uint s = 0u; s < 9u; ++s) {
+    uint half_m = 1u << s;
+    uint m = half_m << 1u;
+    uint grp = bf / half_m;
+    uint pos = bf % half_m;
+    uint i0 = base + (grp * m) + pos;
+    uint i1 = i0 + half_m;
+    float ang = -2.0 * PI * float(pos) / float(m);
+    vec2 tw = vec2(cos(ang), sin(ang));
+    vec2 a = z[i0];
+    vec2 b = cmul(z[i1], tw);
+    z[i0] = a + b;
+    z[i1] = a - b;
+    barrier();
+  }
+
+  // Split + output. Thread tid owns bin tid (0..M-1) of both channels.
+  uint bin = tid;
+  vec2 xl = recover_bin(0u, bin);
+  vec2 xr = recover_bin(M, bin);
+  float specL = spectrum_value(xl, bin);
+  float specR = spectrum_value(xr, M + bin);
+  imageStore(u_out, ivec2(int(bin), 0), vec4(specL, specR, 0.0, 0.0));
+
+  // Row 1 = raw waveform: the latest M samples (tail of the time-ordered
+  // window), unwindowed, exactly as the CPU stores them.
+  float waveL = in_samples[M + bin];
+  float waveR = in_samples[N + M + bin];
+  imageStore(u_out, ivec2(int(bin), 1), vec4(waveL, waveR, 0.0, 0.0));
+}

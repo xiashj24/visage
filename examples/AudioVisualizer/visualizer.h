@@ -21,24 +21,31 @@
 
 #pragma once
 
-#include "gl_procs.h"
-
 #include <array>
+#include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
+namespace visage {
+  class Window;
+  struct WindowRenderTarget;
+}
+
 namespace viz {
-  // Audio analysis and full-screen rendering, entirely outside visage. Both FFT
-  // backends fill the same texture so the fragment shader is identical either
-  // way and the two can be compared frame to frame.
+  // Audio analysis and full-screen rendering, entirely outside visage. The
+  // analysis and the CPU FFT live here; the renderer, the GPU FFT and the
+  // Resources they need come from visualizer_gl.cpp or visualizer_gpu.cpp,
+  // whichever backend the build selected. Both drive the same panel, so the
+  // CPU/GPU comparison reads the same either way.
   class Visualizer {
   public:
     static constexpr int kFftSize = 1024;
     static constexpr int kBins = kFftSize / 2;
     static constexpr int kChannels = 2;
 
-    // Rows of the analysis texture. The compute kernel writes one channel per
-    // workgroup, so no two workgroups touch the same texel.
+    // Layout of the CPU analysis result. Each backend packs it into whatever
+    // its GPU kernel writes, which is not the same texture on both.
     enum Row {
       kSpectrumLeft,
       kSpectrumRight,
@@ -52,7 +59,12 @@ namespace viz {
       Gpu
     };
 
-    bool initialize();
+    Visualizer();
+    ~Visualizer();
+
+    // `window` is the one being drawn into: the gl backend loads its entry
+    // points through it, the SDL_GPU backend needs its swapchain format.
+    bool initialize(visage::Window* window);
     void shutdown();
 
     // Appends interleaved stereo frames to the analysis window.
@@ -64,10 +76,9 @@ namespace viz {
     void measureBackends();
 
     // Analyses the current window with the selected backend and draws over the
-    // whole drawable. Leaves the GL state visage's backend relies on untouched:
-    // GL_BLEND stays enabled, scissor/cull/depth and the front face are not
-    // changed, and only the blend function is set (which visage sets per draw).
-    void render(int width, int height, float seconds);
+    // whole drawable. `target` is what the application renders into; on the gl
+    // backend only its dimensions are filled in.
+    void render(const visage::WindowRenderTarget& target, float seconds);
 
     Backend backend() const { return backend_; }
     void setBackend(Backend backend) { backend_ = gpuAvailable() ? backend : Backend::Cpu; }
@@ -75,9 +86,20 @@ namespace viz {
     bool gpuAvailable() const { return gpu_available_; }
     const std::string& status() const { return status_; }
 
+    // GPU FFT kernels this backend offers. The SDL_GPU backend has two, so the
+    // packed real-to-complex transform and the plain complex one can be
+    // compared live; the gl backend has the one.
+    int kernelCount() const;
+    const char* kernelName(int index) const;
+    int kernel() const { return kernel_; }
+    void setKernel(int index) { kernel_ = index; }
+    // Fenced GPU time for one FFT, or negative where the backend cannot
+    // measure it. Filled in by measureBackends().
+    double kernelMicros(int index) const;
+
     // Largest disagreement between the two backends over one shared window, as
     // a fraction of full scale. Negative when the comparison could not run
-    // (reading back an R32F attachment is not universally supported).
+    // (reading the analysis texture back is not universally supported).
     float kernelAgreement() const { return kernel_agreement_; }
 
     float amplitude() const { return amplitude_; }
@@ -90,40 +112,51 @@ namespace viz {
     bool gpuMeasured() const { return gpu_measured_; }
 
   private:
-    bool buildRenderProgram();
-    bool buildComputeProgram();
-    void createTexture();
+    // GPU objects, defined by whichever backend file is compiled.
+    struct Resources;
+
+    // ---- implemented per backend ----
+    bool initializeResources(visage::Window* window);
+    void shutdownResources();
+    // Uploads the CPU analysis result to the texture the renderer samples.
+    void uploadRows();
+    // Split so a batch of dispatches can be timed over one upload.
+    void uploadGpuInput();
+    void dispatchGpuKernel(float attack, float release);
+    // Reads the analysis texture back in kRows layout; false when unsupported.
+    bool readRows(std::vector<float>& out);
+    void resetGpuEnvelope();
+    // Brackets GPU work so a batch of it costs one submission. During a frame
+    // the application records onto the target's command buffer and visage
+    // submits it; off-frame - measuring, verifying - the backend uses one of
+    // its own.
+    void beginBatch(const visage::WindowRenderTarget* target = nullptr);
+    void endBatch();
+    void measureKernels();
+    void draw(const visage::WindowRenderTarget& target, float seconds);
+
+    // ---- shared ----
+    void analyseGpu(float attack, float release) {
+      uploadGpuInput();
+      dispatchGpuKernel(attack, release);
+    }
 
     // Time-orders the ring into channel-major `window_` and returns the peak.
     float collectWindow();
     void analyseCpu(float attack, float release);
-    void analyseGpu(float attack, float release);
     void computeNormFactor();
-    void forwardFft(float* re, float* im) const;
+    void forwardFft(float* real, float* imaginary) const;
 
     // Runs both backends over one synthetic window and records the largest
     // difference, so a broken kernel shows up as a number instead of as an
     // image that merely looks plausible.
     void verifyKernel();
-    bool readTexture(std::vector<float>& out);
 
-    GLuint render_program_ = 0;
-    GLuint compute_program_ = 0;
-    GLuint vao_ = 0;
-    GLuint texture_ = 0;
-    GLuint sample_buffer_ = 0;  // channel-major window, compute input
-    GLuint envelope_buffer_ = 0;  // persistent smoothed spectrum
-    GLint u_resolution_ = -1;
-    GLint u_time_ = -1;
-    GLint u_amplitude_ = -1;
-    GLint u_audio_ = -1;
-    GLint u_norm_factor_ = -1;
-    GLint u_db_floor_ = -1;
-    GLint u_attack_ = -1;
-    GLint u_release_ = -1;
+    std::unique_ptr<Resources> resources_;
 
     bool gpu_available_ = false;
     Backend backend_ = Backend::Cpu;
+    int kernel_ = 0;
     std::string status_;
 
     // Interleaved history, read back from the newest sample. Sized well beyond
