@@ -22,14 +22,15 @@
 #pragma once
 
 // This is NOT the real bgfx. It is a source-compatible reimplementation of
-// the bgfx API subset visage uses, running on OpenGL 3.3 core / OpenGL ES 3.0.
-// Draws execute immediately at submit(); this is equivalent to bgfx's
-// deferred view-ordered submission because visage's view ids are strictly
-// monotonically increasing within a frame.
+// the bgfx API subset visage uses. Two backends implement it: gl/ on OpenGL
+// 3.3 core / OpenGL ES 3.0, and gpu/ on SDL_GPU (Vulkan/Metal/D3D12).
 //
-// Shaders are plain GLSL text (330 core / 300 es common subset), compiled by
-// the driver at createShader() - there is no offline shader compiler and no
-// binary shader container.
+// Both rely on visage's view ids increasing monotonically within a frame, so
+// bgfx's view-ordered submission collapses to submission order.
+//
+// createShader() takes plain GLSL text on the gl backend and a compiled blob
+// from tools/shadertool on the gpu backend; the build embeds whichever the
+// selected backend needs, under the same symbol names.
 
 #include <cstdint>
 
@@ -216,11 +217,17 @@ namespace bgfx {
   const char* getRendererName(RendererType::Enum type);
   RendererType::Enum getRendererType();
 
-  // ---- Extensions beyond the bgfx API (this backend is GL-only) ----
+  // ---- Extensions beyond the bgfx API ----
 
-  // One-time GL object/caps setup. Requires loadGlApi() to have succeeded on
-  // the thread whose context is current.
-  bool initGlBackend();
+  // One-time backend setup. The gl backend requires loadGlApi() to have
+  // succeeded on the thread whose context is current; the gpu backend creates
+  // its own device here.
+  bool initBackend();
+
+  // The gpu backend's SDL_GPUDevice, so the windowing layer can claim windows
+  // against it and an application can render into the same device. Null on the
+  // gl backend, where the application owns the context instead.
+  void* gpuDevice();
 
   // Draws a window framebuffer's texture into the default framebuffer as one
   // full-screen quad, rotated by `rotation_quarter_turns` (0-3, clockwise).

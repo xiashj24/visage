@@ -21,10 +21,13 @@
 
 #include "renderer.h"
 
-#include "gl/gl_api.h"
 #include "visage_utils/string_utils.h"
 
 #include <bgfx/bgfx.h>
+
+#if !VISAGE_SDL_GPU
+#include "gl/gl_api.h"
+#endif
 
 namespace visage {
   Renderer& Renderer::instance() {
@@ -36,8 +39,15 @@ namespace visage {
     if (initialized_)
       return supported_;
 
-    if (!loadGlApi(get_proc_address) || !bgfx::initGlBackend()) {
+#if VISAGE_SDL_GPU
+    // The backend owns the device here, so there is no context to load against.
+    (void)get_proc_address;
+    if (!bgfx::initBackend()) {
+      error_message_ = "Failed to create an SDL_GPU device.";
+#else
+    if (!loadGlApi(get_proc_address) || !bgfx::initBackend()) {
       error_message_ = "Failed to load OpenGL 3.3 / OpenGL ES 3.0 functions.";
+#endif
       VISAGE_LOG(error_message_.c_str());
       VISAGE_ASSERT(false);
       return false;
@@ -47,18 +57,25 @@ namespace visage {
     supported_ = true;
     swap_chain_supported_ = bgfx::getCaps()->supported & BGFX_CAPS_SWAP_CHAIN;
 
+    VISAGE_LOG(String("Renderer: ") + bgfx::getRendererName(bgfx::getRendererType()));
+#if !VISAGE_SDL_GPU
     VISAGE_LOG(String("GL_VENDOR: ") + reinterpret_cast<const char*>(gl.getString(GL_VENDOR)));
     VISAGE_LOG(String("GL_RENDERER: ") + reinterpret_cast<const char*>(gl.getString(GL_RENDERER)));
     VISAGE_LOG(String("GL_VERSION: ") + reinterpret_cast<const char*>(gl.getString(GL_VERSION)));
     VISAGE_LOG(String("GL_SHADING_LANGUAGE_VERSION: ") +
                reinterpret_cast<const char*>(gl.getString(GL_SHADING_LANGUAGE_VERSION)));
+#endif
     return true;
   }
 
   void Renderer::initializeWindowless() {
-    // The application must have initialized against some current GL context
-    // already - a hidden window works; visage cannot create a context itself.
+    // The gl backend needs a context the application already made current; the
+    // gpu backend has a device of its own and can run with no window at all.
+#if VISAGE_SDL_GPU
+    initialize(nullptr);
+#else
     VISAGE_ASSERT(initialized_);
+#endif
   }
 
   void Renderer::setScreenshotData(const uint8_t* data, int width, int height, int pitch, bool blue_red) {

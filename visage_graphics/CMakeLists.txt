@@ -1,9 +1,15 @@
-# The gl/ backend headers are internal - kept out of the amalgamated public
+# Backend headers are internal - kept out of the amalgamated public
 # visage/graphics.h.
 file(GLOB HEADERS *.h)
 file(GLOB SOURCE_FILES *.cpp)
-list(APPEND SOURCE_FILES gl/gl_api.cpp gl/bgfx_gl.cpp)
-set(GL_BACKEND_HEADERS gl/gl_api.h gl/include/bgfx/bgfx.h)
+set(BACKEND_HEADERS backend/include/bgfx/bgfx.h)
+
+if (VISAGE_SDL_GPU)
+  list(APPEND SOURCE_FILES gpu/bgfx_sdlgpu.cpp)
+else ()
+  list(APPEND SOURCE_FILES gl/gl_api.cpp gl/bgfx_gl.cpp)
+  list(APPEND BACKEND_HEADERS gl/gl_api.h)
+endif ()
 
 if (WIN32)
   list(APPEND SOURCE_FILES win32/emoji_win32.cpp)
@@ -22,7 +28,7 @@ endif ()
 amalgamate_headers(${VISAGE_INCLUDE}/visage/graphics.h "${HEADERS}")
 list(APPEND HEADERS ${VISAGE_INCLUDE}/visage/graphics.h)
 
-add_library(VisageGraphics OBJECT ${SOURCE_FILES} ${PLATFORM_FILES} ${HEADERS} ${GL_BACKEND_HEADERS})
+add_library(VisageGraphics OBJECT ${SOURCE_FILES} ${PLATFORM_FILES} ${HEADERS} ${BACKEND_HEADERS})
 
 if (UNIX AND NOT APPLE)
   add_definitions(-D_LARGEFILE64_SOURCE)
@@ -66,12 +72,17 @@ target_link_libraries(
 
 include(embedded.cmake)
 
+if (VISAGE_SDL_GPU)
+  target_compile_definitions(VisageGraphics PUBLIC VISAGE_SDL_GPU=1)
+  target_link_libraries(VisageGraphics PRIVATE SDL3::SDL3-static)
+endif ()
+
 target_include_directories(VisageGraphics
   PRIVATE
   ${VISAGE_INCLUDE_PATH}
   ${freetype_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/gl/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/backend/include
 )
 
 if(WIN32)

@@ -35,12 +35,21 @@ namespace {
     using Catch::EventListenerBase::EventListenerBase;
 
     void testRunStarting(const Catch::TestRunInfo&) override {
+#if VISAGE_SDL_GPU
+      // The gpu backend owns its device, so offscreen rendering needs no window.
+      static bool initialized = [] {
+        visage::Renderer::instance().initializeWindowless();
+        return true;
+      }();
+      (void)initialized;
+#else
       static std::unique_ptr<visage::Window> window = [] {
         std::unique_ptr<visage::Window> hidden = visage::createWindow(256, 256);
         hidden->makeContextCurrent();
         visage::Renderer::instance().initialize(hidden->glProcAddressGetter());
         return hidden;
       }();
+#endif
     }
   };
 }

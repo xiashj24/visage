@@ -819,7 +819,7 @@ namespace bgfx {
     return g_state.caps.rendererType;
   }
 
-  bool initGlBackend() {
+  bool initBackend() {
     if (g_state.initialized)
       return true;
     if (!glApiLoaded())
@@ -853,6 +853,10 @@ namespace bgfx {
 
     g_state.initialized = true;
     return true;
+  }
+
+  void* gpuDevice() {
+    return nullptr;  // The application owns the GL context on this backend.
   }
 
   namespace {

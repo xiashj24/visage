@@ -21,6 +21,7 @@ option(VISAGE_ENABLE_WIDGETS "Add widgets library" ON)
 option(VISAGE_ENABLE_GRAPHICS_DEBUG_LOGGING "Shows graphics debug log in console in debug mode" OFF)
 option(VISAGE_ADDRESS_SANITIZER "Enable AddressSanitizer" OFF)
 option(VISAGE_BUILD_SHADERTOOL "Build the offline GLSL -> SPIR-V/MSL compiler" OFF)
+option(VISAGE_SDL_GPU "Render with SDL_GPU (Vulkan/Metal/D3D12) instead of OpenGL" OFF)
 
 # Linux means the Raspberry Pi / KMSDRM product path, which renders with
 # OpenGL ES 3.0; Windows and macOS simulators use desktop GL core profiles.
@@ -99,6 +100,26 @@ function(amalgamate_sources GENERATED_FILES AMALGAMATED_SOURCE_BASE FILE_SOURCES
   set(${GENERATED_FILES} "${GENERATED}" PARENT_SCOPE)
   file(CONFIGURE OUTPUT "${AMALGAMATED_SOURCE_BASE}${PART}.cpp" CONTENT "${FILE_CONTENTS}")
 endfunction()
+
+# SDL3 provides windowing on every platform (Win32/Cocoa/KMSDRM), and the gpu
+# backend's device as well. Pinned to a GitHub release source archive - not a
+# git tag - so the version stamps as a real release instead of
+# "development-version".
+set(VISAGE_SDL3_VERSION "3.4.12" CACHE STRING "SDL3 release to fetch")
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CPM.cmake)
+
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+message(STATUS "VISAGE: Downloading SDL3 ${VISAGE_SDL3_VERSION}")
+CPMAddPackage(
+  NAME SDL3
+  URL https://github.com/libsdl-org/SDL/releases/download/release-${VISAGE_SDL3_VERSION}/SDL3-${VISAGE_SDL3_VERSION}.tar.gz
+  EXCLUDE_FROM_ALL YES
+)
 
 add_subdirectory(visage_file_embed)
 add_subdirectory(visage_graphics)

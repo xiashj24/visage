@@ -23,7 +23,19 @@ function(visage_embed_shaders project include_filename namespace original_shader
   source_group("Shaders" FILES ${original_shaders})
 endfunction()
 
-file(GLOB LIBRARY_SHADERS shaders/*.glsl)
+# The gpu backend consumes shadertool's blobs. They are extensionless with the
+# same stems, so NAME_WE gives identical symbols either way and nothing that
+# keys on shader names has to change.
+if (VISAGE_SDL_GPU)
+  file(GLOB LIBRARY_SHADERS shaders/compiled/*)
+  if (NOT LIBRARY_SHADERS)
+    message(FATAL_ERROR
+      "VISAGE_SDL_GPU needs compiled shaders in visage_graphics/shaders/compiled. "
+      "Build them with -DVISAGE_BUILD_SHADERTOOL=ON --target shaders.")
+  endif ()
+else ()
+  file(GLOB LIBRARY_SHADERS shaders/*.glsl)
+endif ()
 file(GLOB FONT_TTF_FILES fonts/*.ttf)
 file(GLOB ICON_FILES icons/*.svg)
 
