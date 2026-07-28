@@ -84,6 +84,10 @@ int runExample() {
 
     canvas.setColor(0xff0a0a14);
     canvas.fill(0, 0, app.width(), app.height());
+
+    // The quad redraws itself, but the texture and tints are written here, so
+    // without this the shader keeps re-running on a frozen signal.
+    app.redraw();
   };
 
   app.setTitle("Visage Shader Texture Example");
