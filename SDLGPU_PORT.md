@@ -197,9 +197,33 @@ above the shim, so they can be built against the GL backend now and carry over.
 
 ---
 
-## Phase 2 — the backend, headless first
+## Phase 2 — the backend, headless first — **DONE (offscreen)**
 
-New `visage_graphics/gpu/bgfx_sdlgpu.cpp` behind the same header.
+- [x] 475/475 pixel assertions on Windows/Vulkan, and **229/229 ctest on both
+      backends** from one tree
+
+`visage_graphics/gpu/bgfx_sdlgpu.cpp`, selected with `-DVISAGE_SDL_GPU=ON`. The
+shim header moved to `backend/include/bgfx/bgfx.h` so both backends implement
+one file rather than a copy each, and `embedded.cmake` embeds
+`shaders/compiled/*` instead of `shaders/*.glsl` — stems match, so every symbol
+`ShaderCache` and `ProgramCache` key on is unchanged.
+
+Three things the tests caught that this plan had not anticipated:
+
+- **`setVertexBuffer(VertexBufferHandle)` carried no layout.** The GL backend
+  keeps it on the buffer; this one dropped it. Pipelines are keyed on layout, so
+  persistent-buffer draws reached pipeline creation with a dangling pointer.
+- **Readback has to flush.** The plan said so and the first implementation did
+  not, so `requestScreenShot` read a texture whose draws were still queued.
+- **The headless screenshot path goes through `bgfx::blit`**, gated on
+  `TEXTURE_BLIT` *and* `TEXTURE_READ_BACK`. Advertising only the latter skipped
+  the capture silently and left a 0x0 screenshot, which surfaced as a segfault
+  in `Screenshot::sample` rather than a failed assertion.
+
+Still stubbed, both Phase 3: `presentFrameBuffer` needs a claimed window, and
+`reset` has nothing to do until there is a swapchain.
+
+### Original plan for this phase
 
 - Record-only `submit()` and the copy-pass/render-pass frame structure above.
 - Pipeline cache on `(program, blend state, target format)`.
