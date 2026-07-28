@@ -326,29 +326,100 @@ compute directly and is ported in phase 4.
 
 ---
 
-## Phase 4 — compositing and the visualizer
+## Phase 4 — compositing and the visualizer — **DONE**
 
-- The `onDrawBackground` composite path, now with app and UI sharing one
-  `SDL_GPUDevice` — the app renders into the swapchain texture in an earlier
-  pass, visage composites over it with `LOADOP_LOAD`. The present pipeline
-  already takes `LOADOP_LOAD` when `blend` is set; what is missing is the
-  application's earlier pass.
-- Port `examples/AudioVisualizer` to use xlib's `fft_r2c.comp` /
-  `fft_complex.comp` directly instead of the GL translation. It is excluded
-  from `VISAGE_SDL_GPU` builds until then — drop it from `SKIPPED_EXAMPLES` in
-  `examples/CMakeLists.txt` to bring it back.
-- **macOS gains compute.** The permanent CPU-only fallback assumption from the
-  GL plan is void — Metal has compute. Update the self-check status line
-  accordingly.
+- [x] `AudioVisualizer` runs on **both** backends from one tree, compositing
+      under the UI, and its compute FFT matches the CPU one to `0.00000` on
+      Vulkan and on GL
+- [x] 229/229 ctest on both backends, and the other examples unaffected by the
+      present-path change
+
+### The application borrows visage's command buffer
+
+A swapchain texture is acquired against one command buffer and presented when
+*that* buffer is submitted, so there is no way to hand an application a second
+target: it has to draw onto the same one. `bgfx::acquireWindowTarget()` does
+the acquire and `presentFrameBuffer()` reuses whatever it handed out, so the
+frame is
+
+    drawWindow()          UI into the layer framebuffers, flushed
+    onDrawBackground()    acquireWindowTarget() -> app records its passes
+    present()             composite pass, LOADOP_LOAD, submits
+
+and the app's pass lands after the UI's own draws with no coordination beyond
+submission order. Reaching it from application code is
+`ApplicationEditor::windowRenderTarget()`, which returns
+`visage::WindowRenderTarget` — the command buffer and texture on SDL_GPU, and
+on OpenGL just the drawable size, because there the application binds the
+default framebuffer itself. That is what lets one example drive both.
+
+`Renderer` grew `createGpuShader` / `createComputePipeline` (plus
+`lastShaderError`) so an application can build its own pipelines from
+shadertool blobs without the shim leaking out of `visage_graphics`.
+
+### The MSL entrypoint was wrong for every shader
+
+`createShader` passed `"main"`, but SPIRV-Cross renames the entry point to
+`main0` on the way to MSL — so **every** shader would have failed to create on
+macOS, not just the new compute ones. Found while adding compute, fixed for all
+stages. macOS is still untested hardware; this was a build-time certainty, not
+a measurement.
+
+That is also the "macOS gains compute" item: the status line no longer reasons
+about GL versions at all on this backend. It reports what the device says
+(`SDL_GPUTextureSupportsFormat` for RG32F storage writes) and, on failure, the
+driver's own message.
+
+### shadertool: verbatim shaders and blob v3
+
+`.vert` / `.frag` / `.comp` are now compiled with no preamble, no injected
+locations and no uniform block — they are already Vulkan GLSL and declare their
+own sets and bindings. An application driving SDL_GPU owns its descriptor
+layout and would only be fighting the injection; `.glsl` is unchanged.
+
+Blob v3 replaces the `is_fragment` flag with a stage word and carries the
+compute counts and workgroup size, all from `SDL_ShaderCross_ReflectComputeSPIRV`
+rather than hardcoded the way xlib has to. Every blob was regenerated; the
+graphics ones differ only by the header, and regeneration was verified
+byte-identical under v2 first so the diff means what it says.
+
+### One change to xlib's kernels
+
+They use a symmetric Hann window (`/(N-1)`); visage's CPU path is periodic
+(`/N`). Left alone, the self-check reports a disagreement that looks like a
+miscompiled kernel and is not. Otherwise both kernels are xlib's verbatim.
+
+The kernels want **512 invocations per workgroup**, well above the 128 Vulkan
+guarantees — the first thing to suspect if v3dv refuses them in Phase 5. That
+path degrades to the CPU FFT with the driver's message in the status line.
+
+### Numbers on the dev machine (RTX 3080 Ti, Release)
+
+| | CPU analysis | GPU analysis | R2C 512 | complex 1024 |
+|---|---|---|---|---|
+| SDL_GPU / Vulkan | 101.9 µs | 14.2 µs | 8.1 µs | 6.4 µs |
+| OpenGL 4.3 | 167.7 µs | 19.3 µs | — | — |
+
+The last two columns are fenced GPU time per transform, the only per-kernel
+measurement SDL_GPU allows. **The packed real-to-complex kernel is the slower
+of the two here**, which is the opposite of the argument for writing it: half
+the transform, but only 256 of the 512 threads do butterflies for a channel and
+the recovery step diverges. Whether that holds on v3d is a Phase 5 question —
+it is exactly the kind of thing that inverts on a small GPU.
+
+The two backends' CPU figures are not comparable to each other (different
+builds, different texture layouts); each column is only meaningful against the
+one beside it.
 
 ---
 
 ## Phase 5 — Raspberry Pi 4
 
-Re-run `PI4_BRINGUP.md` against the SDL_GPU build. Stages 3, 4 and 7 carry over
+Re-run `PI4_BRINGUP.md` against the SDL_GPU build. Stages 3 and 4 carry over
 unchanged; stage 2's GL version logging becomes `SDL_GetGPUDeviceDriver()` plus
 the device's supported formats. Stage 5's `LiveShaderEditing` row no longer
-applies — that example is gl-only now.
+applies — that example is gl-only now. Stage 7 gains a kernel selector, and its
+status line comes from the device rather than from a GL version.
 
 ### Comparing the two backends
 

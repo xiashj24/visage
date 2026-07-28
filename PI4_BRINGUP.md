@@ -214,6 +214,7 @@ plausible:
 | `compute FFT ready, matches CPU to 0.0xxxx` | **Report the number.** v3d miscompiles the kernel, or its shared-memory barriers behave differently from NVIDIA's. |
 | `no compute shaders: GLES 3.0 (needs GLES 3.1)` | Context fell back; visualizer is CPU-only. Cross-check against stage 2. |
 | `compute FFT ready (kernel check unavailable)` | R32F readback unsupported, so the check could not run. Kernel is probably fine but unproven. |
+| `no compute FFT: ...` (SDL_GPU build) | The device's own reason. The kernels want 512 invocations per workgroup, which Vulkan only guarantees to 128, so v3dv refusing them is the first thing to suspect. |
 
 - [ ] Status line recorded
 - [ ] **Click "Measure both (200x)" and record the CPU and GPU microsecond
@@ -226,6 +227,9 @@ plausible:
 - [ ] Frame rate holds at the panel's refresh rate
 - [ ] Toggle CPU ↔ GPU compute — the picture should look the same either way
       (the two backends fill the same texture)
+- [ ] SDL_GPU build only: toggle **R2C 512 ↔ complex 1024** and record both
+      per-kernel figures. On the dev machine the packed kernel is the slower
+      one; whether that survives on v3d is the open question.
 
 Audio note: on a bare TTY the recording device may not open, in which case the
 example falls back to **"Test tone"** automatically. That is expected and the
@@ -256,7 +260,7 @@ visualizer still works; it does not indicate a problem.
 | Shader compile errors at startup | v3d's GLSL ES compiler is stricter | error text comes straight from the driver log |
 | Everything black outside the UI panel | transparent-background compositing not taking effect | `Canvas::setTransparentBackground`, present blend in `bgfx_gl.cpp` |
 | Visualizer draws but UI is invisible (or vice versa) | draw order / framebuffer binding | `onDrawBackground()` fires after `drawWindow()`, before `present()` |
-| Compute kernel disagrees with CPU | barriers or `bitfieldReverse` on v3d | `kComputeSource` in `examples/AudioVisualizer/visualizer.cpp` |
+| Compute kernel disagrees with CPU | barriers or `bitfieldReverse` on v3d | `kComputeSource` in `examples/AudioVisualizer/visualizer_gl.cpp`, or `examples/shaders/fft_*.comp` on SDL_GPU |
 | GLES 3.0 instead of 3.1 | v3d/Mesa version, or `fkms` instead of full KMS | stage 0 `config.txt`, `apt list --installed | grep mesa` |
 | Input in the wrong place after rotation | input transform vs render transform disagree | `setScreenRotation` consumers in the SDL3 adapter |
 
