@@ -20,6 +20,7 @@ option(VISAGE_AMALGAMATED_BUILD "Compile sources together" ON)
 option(VISAGE_ENABLE_WIDGETS "Add widgets library" ON)
 option(VISAGE_ENABLE_GRAPHICS_DEBUG_LOGGING "Shows graphics debug log in console in debug mode" OFF)
 option(VISAGE_ADDRESS_SANITIZER "Enable AddressSanitizer" OFF)
+option(VISAGE_BUILD_SHADERTOOL "Build the offline GLSL -> SPIR-V/MSL compiler" OFF)
 
 # Linux means the Raspberry Pi / KMSDRM product path, which renders with
 # OpenGL ES 3.0; Windows and macOS simulators use desktop GL core profiles.
@@ -106,6 +107,10 @@ add_subdirectory(visage_utils)
 add_subdirectory(visage_widgets)
 add_subdirectory(visage_windowing)
 add_subdirectory(visage_app)
+
+if (VISAGE_BUILD_SHADERTOOL)
+  add_subdirectory(tools/shadertool)
+endif ()
 
 set(DUMMY_FILE ${CMAKE_CURRENT_BINARY_DIR}/dummy.cpp)
 if (NOT EXISTS ${DUMMY_FILE})

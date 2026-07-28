@@ -3,3 +3,8 @@
 *.h     text eol=lf
 *.mm    text eol=lf
 *.cmake text eol=lf
+
+# Compiled shader blobs have no extension and carry ASCII MSL after the SPIR-V,
+# so git's binary heuristic is the only thing keeping autocrlf from corrupting
+# them. Say it outright instead.
+**/compiled/** binary
