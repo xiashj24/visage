@@ -1,6 +1,9 @@
 file(GLOB EXAMPLES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} */)
 
-file(GLOB_RECURSE EXAMPLE_SHADERS shaders/*.glsl)
+# thirdparty/ is Shadertoy source that only means anything after the offline
+# tool injects its preamble - embedding it would hand the GL backend, which
+# compiles this text verbatim at runtime, something it cannot build.
+file(GLOB EXAMPLE_SHADERS shaders/*.glsl)
 add_compile_definitions(SHADERS_FOLDER=\"${CMAKE_CURRENT_SOURCE_DIR}/shaders\")
 
 visage_embed_shaders(EmbeddedShaderResources "example_shaders.h" "resources::shaders" "${EXAMPLE_SHADERS}")

@@ -368,6 +368,19 @@ namespace visage {
     setColorMult(layer.hdr());
     setOriginFlipUniform(layer.bottomLeftOrigin());
     Shader* shader = batches[0].shapes->front().shader;
+
+    for (const auto& uniform : shader->uniforms())
+      bgfx::setUniform(UniformCache::uniformHandle(uniform.first.c_str()), uniform.second.data);
+
+    // Stage 0 is the gradient atlas, so a shader's own textures start at 1.
+    int stage = 1;
+    for (const auto& texture : shader->textures()) {
+      if (texture.second == nullptr)
+        continue;
+      bgfx::setTexture(stage++, UniformCache::uniformHandle(texture.first.c_str(), UniformCache::Sampler),
+                       texture.second->textureHandle());
+    }
+
     bgfx::submit(submit_pass,
                  ProgramCache::programHandle(shader->vertexShader(), shader->fragmentShader()));
   }

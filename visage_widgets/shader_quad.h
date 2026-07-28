@@ -30,6 +30,9 @@ namespace visage {
     ShaderQuad(const EmbeddedFile& vertex_shader, const EmbeddedFile& fragment_shader, BlendMode state);
     ~ShaderQuad() override = default;
 
+    // For setUniformValue/setTexture - the quad owns the shader it draws.
+    Shader& shader() { return shader_; }
+
     void draw(Canvas& canvas) override;
 
   private:
