@@ -27,7 +27,8 @@ add_embedded_resources(EmbeddedImageResources "example_images.h" "resources::ima
 
 # ClapPlugin is deliberately not built: CLAP/VST-style plugin-GUI hosting has
 # no use case in this fork and the SDL3 backend has no plugin-window path.
-set(SKIPPED_EXAMPLES ClapPlugin)
+# Benchmark is built below instead: it needs a console and its own main().
+set(SKIPPED_EXAMPLES ClapPlugin Benchmark)
 
 if (VISAGE_SDL_GPU)
   # LiveShaderEditing recompiles GLSL at runtime, which only the gl backend
@@ -68,3 +69,9 @@ foreach (EXAMPLE ${EXAMPLES})
     endif ()
   endif ()
 endforeach ()
+
+# Console, not WIN32_EXECUTABLE: it reports to stdout and is driven over SSH on
+# the Pi. Lives here rather than in tests/ because it reuses the example fonts.
+add_executable(VisageBenchmark Benchmark/benchmark.cpp)
+target_link_libraries(VisageBenchmark PRIVATE visage EmbeddedFontResources)
+set_target_properties(VisageBenchmark PROPERTIES FOLDER "visage/examples")

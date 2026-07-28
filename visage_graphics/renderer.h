@@ -48,6 +48,10 @@ namespace visage {
     // initialize(), and always null on the OpenGL backend.
     void* gpuDevice() const;
 
+    // What is actually driving the GPU - the SDL_GPU driver name ("vulkan",
+    // "metal") or the OpenGL flavour. For diagnostics; do not branch on it.
+    const char* backendName() const;
+
     static void resetResolution(int width, int height) { }
 
     void setScreenshotData(const uint8_t* data, int width, int height, int pitch, bool blue_red);

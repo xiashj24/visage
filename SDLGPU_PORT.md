@@ -332,7 +332,29 @@ compute directly and is ported in phase 4.
 
 Re-run `PI4_BRINGUP.md` against the SDL_GPU build. Stages 3, 4 and 7 carry over
 unchanged; stage 2's GL version logging becomes `SDL_GetGPUDeviceDriver()` plus
-the device's supported formats.
+the device's supported formats. Stage 5's `LiveShaderEditing` row no longer
+applies — that example is gl-only now.
+
+### Comparing the two backends
+
+`VisageBenchmark` (`examples/Benchmark/`) renders headless, so it needs no
+display and can be driven over SSH, and it measures the renderer rather than
+the compositor or the panel's refresh rate. Build both trees and diff the
+`--csv` output.
+
+**SDL_GPU has no timestamp queries** — `SDL_QueryGPUFence` is the only
+query-shaped call in the whole header — so true GPU time is not obtainable
+through the shim, and nothing here pretends otherwise. Instead a batch of
+frames is submitted and drained by one readback, whose fence wait puts GPU
+execution inside wall time. `blocked` (wall minus *this thread's* CPU) is a
+lower bound on GPU-bound time, not a measurement of it.
+
+Two traps this design avoids, both of which make naive measurements useless:
+vsync pins any windowed comparison to the panel refresh, and `GALLIUM_HUD`
+instruments the gl path only, because v3d is Gallium and v3dv is not.
+
+Watch `cpu`, not just `wall`: it sums every thread, so a driver with workers
+can exceed wall time, and on a 4-core Pi that is the number with a ceiling.
 
 ---
 

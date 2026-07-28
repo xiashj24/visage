@@ -82,6 +82,10 @@ namespace visage {
     return bgfx::gpuDevice();
   }
 
+  const char* Renderer::backendName() const {
+    return bgfx::getRendererName(bgfx::getRendererType());
+  }
+
   void Renderer::setScreenshotData(const uint8_t* data, int width, int height, int pitch, bool blue_red) {
     screenshot_ = Screenshot(data, width, height, pitch, blue_red);
   }
