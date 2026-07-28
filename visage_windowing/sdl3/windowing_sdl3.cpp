@@ -21,6 +21,8 @@
 
 #include "windowing_sdl3.h"
 
+#include "visage_graphics/renderer.h"
+
 #include <map>
 #include <SDL3/SDL.h>
 #include <vector>
@@ -34,6 +36,7 @@ namespace visage {
     bool g_quit_event_loop = false;
     std::vector<std::string> g_drag_files;
 
+#if !VISAGE_SDL_GPU
     // visage's own shaders only need 330 core / 300 es, but compute shaders
     // (GL 4.3 / GLES 3.1) let an application run GPU kernels in the shared
     // context, so ask for those first. Apple's GL stops at 4.1 and has no
@@ -64,6 +67,7 @@ namespace visage {
       SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
       SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
     }
+#endif
 
     void ensureSdlInitialized() {
       static bool initialized = [] {
@@ -229,10 +233,12 @@ namespace visage {
   WindowSdl3::WindowSdl3(int x, int y, int width, int height, Decoration decoration) :
       Window(width, height), owns_window_(true), decoration_(decoration) {
     ensureSdlInitialized();
-    setGlContextAttributes(kPreferredGlMajor, kPreferredGlMinor);
 
-    SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE |
-                            SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    SDL_WindowFlags flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#if !VISAGE_SDL_GPU
+    setGlContextAttributes(kPreferredGlMajor, kPreferredGlMinor);
+    flags |= SDL_WINDOW_OPENGL;
+#endif
     if (decoration == Decoration::Client || decoration == Decoration::Popup)
       flags |= SDL_WINDOW_BORDERLESS;
 
@@ -261,6 +267,7 @@ namespace visage {
   }
 
   void WindowSdl3::initialize() {
+#if !VISAGE_SDL_GPU
     if (g_gl_context == nullptr) {
       g_gl_context = SDL_GL_CreateContext(window_);
       if (g_gl_context == nullptr) {
@@ -275,6 +282,7 @@ namespace visage {
 
     makeContextCurrent();
     SDL_GL_SetSwapInterval(1);
+#endif
 
     if (decoration_ == Decoration::Client)
       SDL_SetWindowHitTest(window_, clientDecorationHitTest, this);
@@ -299,13 +307,29 @@ namespace visage {
   }
 
   void WindowSdl3::makeContextCurrent() {
+#if VISAGE_SDL_GPU
+    // Deferred, not done in initialize(): the renderer creates the device from
+    // the first window, so it does not exist yet while that window is starting.
+    if (gpu_device_ == nullptr && window_) {
+      gpu_device_ = static_cast<SDL_GPUDevice*>(Renderer::instance().gpuDevice());
+      if (gpu_device_ && !SDL_ClaimWindowForGPUDevice(gpu_device_, window_)) {
+        VISAGE_LOG(SDL_GetError());
+        gpu_device_ = nullptr;
+      }
+    }
+#else
     if (window_ && g_gl_context)
       SDL_GL_MakeCurrent(window_, g_gl_context);
+#endif
   }
 
+  // Nothing to do on the gpu backend: the present pass already submitted the
+  // command buffer that acquired the swapchain texture, and that is the swap.
   void WindowSdl3::swapBuffers() {
+#if !VISAGE_SDL_GPU
     if (window_)
       SDL_GL_SwapWindow(window_);
+#endif
   }
 
   void WindowSdl3::updateDpiScale() {
@@ -582,6 +606,14 @@ namespace visage {
       return;
 
     g_windows.erase(SDL_GetWindowID(window_));
+#if VISAGE_SDL_GPU
+    // SDL_GPU does not watch for window destruction, so an unclaimed swapchain
+    // would outlive its surface.
+    if (gpu_device_) {
+      SDL_ReleaseWindowFromGPUDevice(gpu_device_, window_);
+      gpu_device_ = nullptr;
+    }
+#endif
     if (owns_window_)
       SDL_DestroyWindow(window_);
     window_ = nullptr;

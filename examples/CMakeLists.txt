@@ -1,9 +1,19 @@
 file(GLOB EXAMPLES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} */)
 
-# thirdparty/ is Shadertoy source that only means anything after the offline
-# tool injects its preamble - embedding it would hand the GL backend, which
-# compiles this text verbatim at runtime, something it cannot build.
-file(GLOB EXAMPLE_SHADERS shaders/*.glsl)
+# Whichever form the selected backend consumes, matching visage_graphics.
+# Either way thirdparty/ stays out: it is Shadertoy source that only means
+# anything after the offline tool injects its preamble, so handing it to the
+# GL backend, which compiles this text verbatim at runtime, cannot work.
+if (VISAGE_SDL_GPU)
+  file(GLOB EXAMPLE_SHADERS shaders/compiled/*)
+  if (NOT EXAMPLE_SHADERS)
+    message(FATAL_ERROR
+      "VISAGE_SDL_GPU needs compiled shaders in examples/shaders/compiled. "
+      "Build them with -DVISAGE_BUILD_SHADERTOOL=ON --target shaders.")
+  endif ()
+else ()
+  file(GLOB EXAMPLE_SHADERS shaders/*.glsl)
+endif ()
 add_compile_definitions(SHADERS_FOLDER=\"${CMAKE_CURRENT_SOURCE_DIR}/shaders\")
 
 visage_embed_shaders(EmbeddedShaderResources "example_shaders.h" "resources::shaders" "${EXAMPLE_SHADERS}")
@@ -17,11 +27,19 @@ add_embedded_resources(EmbeddedImageResources "example_images.h" "resources::ima
 
 # ClapPlugin is deliberately not built: CLAP/VST-style plugin-GUI hosting has
 # no use case in this fork and the SDL3 backend has no plugin-window path.
+set(SKIPPED_EXAMPLES ClapPlugin)
+
+if (VISAGE_SDL_GPU)
+  # LiveShaderEditing recompiles GLSL at runtime, which only the gl backend
+  # can do. AudioVisualizer drives GL compute directly; it is ported in phase 4.
+  list(APPEND SKIPPED_EXAMPLES LiveShaderEditing AudioVisualizer)
+endif ()
+
 foreach (EXAMPLE ${EXAMPLES})
   file(GLOB SOURCE_FILES ${EXAMPLE}/*.cpp)
   file(GLOB HEADER_FILES ${EXAMPLE}/*.h)
 
-  if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${EXAMPLE}" AND SOURCE_FILES AND NOT EXAMPLE STREQUAL "ClapPlugin")
+  if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${EXAMPLE}" AND SOURCE_FILES AND NOT EXAMPLE IN_LIST SKIPPED_EXAMPLES)
     add_executable(Example${EXAMPLE} main.cpp ${SOURCE_FILES} ${HEADER_FILES})
 
     if (WIN32)

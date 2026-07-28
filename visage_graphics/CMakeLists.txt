@@ -73,7 +73,6 @@ target_link_libraries(
 include(embedded.cmake)
 
 if (VISAGE_SDL_GPU)
-  target_compile_definitions(VisageGraphics PUBLIC VISAGE_SDL_GPU=1)
   target_link_libraries(VisageGraphics PRIVATE SDL3::SDL3-static)
 endif ()
 

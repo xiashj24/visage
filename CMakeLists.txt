@@ -36,6 +36,12 @@ if (VISAGE_OPENGL_ES)
   add_compile_definitions(VISAGE_OPENGL_ES=1)
 endif ()
 
+# Directory-wide, not just on VisageGraphics: the windowing layer creates the
+# window and its swapchain differently for each backend.
+if (VISAGE_SDL_GPU)
+  add_compile_definitions(VISAGE_SDL_GPU=1)
+endif ()
+
 if (VISAGE_ADDRESS_SANITIZER)
   if (MSVC)
     add_compile_options(/fsanitize=address /Zi)

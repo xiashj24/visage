@@ -21,6 +21,7 @@
 
 #include "bgfx/bgfx.h"
 
+#include "embedded/shaders.h"
 #include "renderer.h"
 #include "visage_utils/defines.h"
 #include "visage_utils/string_utils.h"
@@ -33,6 +34,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace bgfx {
@@ -172,7 +174,9 @@ namespace bgfx {
       TextureFormat::Enum format = TextureFormat::RGBA8;
       uint16_t width = 0;
       uint16_t height = 0;
-      bool is_window = false;
+      // The window whose swapchain presentFrameBuffer() draws this into; null
+      // for an offscreen target.
+      SDL_Window* window = nullptr;
       // Cleared once so the first LOADOP_LOAD reads defined contents.
       bool initialized = false;
     };
@@ -787,7 +791,7 @@ namespace bgfx {
     FrameBufferHandle handle = createFrameBuffer(width, height, format,
                                                  BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     if (isValid(handle))
-      g_framebuffers.get(handle.idx).is_window = true;
+      g_framebuffers.get(handle.idx).window = static_cast<SDL_Window*>(native_window_handle);
     return handle;
   }
 
@@ -799,7 +803,7 @@ namespace bgfx {
       return {};
 
     FrameBufferHandle handle;
-    handle.idx = g_framebuffers.create({ color_texture, format, width, height, false, false });
+    handle.idx = g_framebuffers.create({ color_texture, format, width, height, nullptr, false });
     return handle;
   }
 
@@ -1128,6 +1132,8 @@ namespace bgfx {
     return g_state.frame_count++;
   }
 
+  // Swapchains are claimed with vsync and recreated by SDL when the window
+  // resizes, so there is no reset flag left to act on.
   void reset(uint32_t, uint32_t, uint32_t) { }
 
   const Caps* getCaps() {
@@ -1183,8 +1189,180 @@ namespace bgfx {
     return g_state.device;
   }
 
-  void presentFrameBuffer(FrameBufferHandle, uint16_t, uint16_t, int, bool) {
-    // Phase 3: needs a claimed window and its swapchain texture.
+  namespace {
+    // Present pass: one quad from the window framebuffer's texture into the
+    // swapchain. vs_full_screen_texture takes (x, y, u, v) packed in one vec4
+    // and fs_sample does a plain texture read, so no present-only shader
+    // exists; the pipeline just needs the swapchain's own format.
+    struct PresentResources {
+      ProgramHandle program;
+      VertexLayout layout;
+      SDL_GPUBuffer* quad = nullptr;
+      std::map<std::pair<int, bool>, SDL_GPUGraphicsPipeline*> pipelines;
+    };
+
+    PresentResources g_present;
+
+    // Screen corners of a triangle strip: BL, BR, TL, TR. Texture corners are
+    // a ring in the same rotational order, so a quarter turn is a ring shift.
+    // V runs opposite the gl backend's table because SDL_GPU textures are
+    // top-down - that makes ring i the same image corner on both, and the
+    // permutation and its direction carry over unchanged.
+    constexpr float kCornerX[] = { -1.0f, 1.0f, -1.0f, 1.0f };
+    constexpr float kCornerY[] = { -1.0f, -1.0f, 1.0f, 1.0f };
+    constexpr float kRingU[] = { 0.0f, 1.0f, 1.0f, 0.0f };
+    constexpr float kRingV[] = { 1.0f, 1.0f, 0.0f, 0.0f };
+    constexpr int kCornerToRing[] = { 0, 1, 3, 2 };
+    constexpr int kCornersPerQuad = 4;
+
+    bool initPresentResources() {
+      if (isValid(g_present.program))
+        return true;
+
+      ShaderHandle vertex = createShader(copy(shaders::vs_full_screen_texture.data,
+                                              shaders::vs_full_screen_texture.size));
+      ShaderHandle fragment = createShader(copy(shaders::fs_sample.data, shaders::fs_sample.size));
+      g_present.program = createProgram(vertex, fragment);
+      if (!isValid(g_present.program))
+        return false;
+
+      g_present.layout.begin().add(Attrib::Position, 4, AttribType::Float).end();
+
+      // All four rotations live in the buffer at once, so presenting is a draw
+      // with no upload.
+      float vertices[4 * kCornersPerQuad * 4];
+      float* value = vertices;
+      for (int rotation = 0; rotation < 4; ++rotation) {
+        for (int corner = 0; corner < kCornersPerQuad; ++corner) {
+          int ring = (kCornerToRing[corner] + rotation) & 3;
+          *value++ = kCornerX[corner];
+          *value++ = kCornerY[corner];
+          *value++ = kRingU[ring];
+          *value++ = kRingV[ring];
+        }
+      }
+
+      const Memory* memory = makeRef(vertices, sizeof(vertices));
+      g_present.quad = createBuffer(memory, SDL_GPU_BUFFERUSAGE_VERTEX).buffer;
+      releaseMemory(memory, false);
+      return g_present.quad != nullptr;
+    }
+
+    SDL_GPUGraphicsPipeline* presentPipeline(SDL_GPUTextureFormat format, bool blend) {
+      std::pair<int, bool> key { static_cast<int>(format), blend };
+      auto found = g_present.pipelines.find(key);
+      if (found != g_present.pipelines.end())
+        return found->second;
+
+      ProgramResource& program = g_programs.get(g_present.program.idx);
+
+      SDL_GPUVertexBufferDescription buffer_description {};
+      buffer_description.pitch = g_present.layout.getStride();
+      buffer_description.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+
+      SDL_GPUVertexAttribute attribute {};
+      attribute.location = static_cast<Uint32>(Attrib::Position);
+      attribute.format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
+
+      // Layer contents are premultiplied by BlendMode::Alpha, so compositing
+      // over what the application drew is ONE / INV_SRC_ALPHA.
+      SDL_GPUBlendFactor destination = blend ? SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA :
+                                               SDL_GPU_BLENDFACTOR_ZERO;
+      SDL_GPUColorTargetBlendState blend_state {};
+      blend_state.enable_blend = true;
+      blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+      blend_state.dst_color_blendfactor = destination;
+      blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+      blend_state.dst_alpha_blendfactor = destination;
+      blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+      blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+
+      SDL_GPUColorTargetDescription color_target {};
+      color_target.format = format;
+      color_target.blend_state = blend_state;
+
+      SDL_GPUGraphicsPipelineCreateInfo info {};
+      info.vertex_shader = g_shaders.get(program.vertex_shader.idx).shader;
+      info.fragment_shader = g_shaders.get(program.fragment_shader.idx).shader;
+      info.vertex_input_state.vertex_buffer_descriptions = &buffer_description;
+      info.vertex_input_state.num_vertex_buffers = 1;
+      info.vertex_input_state.vertex_attributes = &attribute;
+      info.vertex_input_state.num_vertex_attributes = 1;
+      info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLESTRIP;
+      info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+      info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+      info.target_info.color_target_descriptions = &color_target;
+      info.target_info.num_color_targets = 1;
+
+      SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(g_state.device, &info);
+      if (pipeline == nullptr)
+        VISAGE_LOG(String("Present pipeline creation failed: ") + SDL_GetError());
+
+      g_present.pipelines[key] = pipeline;
+      return pipeline;
+    }
+  }
+
+  void presentFrameBuffer(FrameBufferHandle handle, uint16_t dst_width, uint16_t dst_height,
+                          int rotation_quarter_turns, bool blend) {
+    if (!isValid(handle))
+      return;
+
+    FrameBufferResource& resource = g_framebuffers.get(handle.idx);
+    if (resource.window == nullptr || !initPresentResources())
+      return;
+
+    // The layer being presented was drawn by commands that may still only be
+    // recorded.
+    executeCommands();
+
+    SDL_GPUCommandBuffer* command_buffer = SDL_AcquireGPUCommandBuffer(g_state.device);
+    // Blocks until the swapchain is ready, which is what paces the frame loop
+    // now that there is no buffer swap to wait on.
+    SDL_GPUTexture* swapchain = nullptr;
+    SDL_WaitAndAcquireGPUSwapchainTexture(command_buffer, resource.window, &swapchain, nullptr, nullptr);
+
+    SDL_GPUGraphicsPipeline* pipeline = nullptr;
+    if (swapchain) {
+      SDL_GPUTextureFormat format = SDL_GetGPUSwapchainTextureFormat(g_state.device, resource.window);
+      pipeline = presentPipeline(format, blend);
+    }
+    // A minimized window has no texture to draw into; the frame is dropped,
+    // but the command buffer still has to be submitted rather than cancelled.
+    if (pipeline == nullptr) {
+      SDL_SubmitGPUCommandBuffer(command_buffer);
+      return;
+    }
+
+    SDL_GPUColorTargetInfo target_info {};
+    target_info.texture = swapchain;
+    // The quad covers the whole swapchain, so its previous contents only
+    // matter when compositing over what the application drew underneath.
+    target_info.load_op = blend ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_DONT_CARE;
+    target_info.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPURenderPass* render_pass = SDL_BeginGPURenderPass(command_buffer, &target_info, 1, nullptr);
+
+    SDL_GPUViewport viewport {};
+    viewport.w = dst_width;
+    viewport.h = dst_height;
+    viewport.max_depth = 1.0f;
+    SDL_SetGPUViewport(render_pass, &viewport);
+    SDL_BindGPUGraphicsPipeline(render_pass, pipeline);
+
+    SDL_GPUBufferBinding vertex_binding {};
+    vertex_binding.buffer = g_present.quad;
+    SDL_BindGPUVertexBuffers(render_pass, 0, &vertex_binding, 1);
+
+    TextureResource& texture = g_textures.get(resource.color_texture.idx);
+    SDL_GPUTextureSamplerBinding sampler_binding {};
+    sampler_binding.texture = texture.texture;
+    sampler_binding.sampler = texture.sampler;
+    SDL_BindGPUFragmentSamplers(render_pass, 0, &sampler_binding, 1);
+
+    SDL_DrawGPUPrimitives(render_pass, kCornersPerQuad, 1,
+                          (rotation_quarter_turns & 3) * kCornersPerQuad, 0);
+    SDL_EndGPURenderPass(render_pass);
+    SDL_SubmitGPUCommandBuffer(command_buffer);
   }
 
   const char* lastShaderError() {

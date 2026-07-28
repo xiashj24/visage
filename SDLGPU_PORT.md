@@ -220,8 +220,9 @@ Three things the tests caught that this plan had not anticipated:
   the capture silently and left a 0x0 screenshot, which surfaced as a segfault
   in `Screenshot::sample` rather than a failed assertion.
 
-Still stubbed, both Phase 3: `presentFrameBuffer` needs a claimed window, and
-`reset` has nothing to do until there is a swapchain.
+Both remaining stubs were Phase 3's: `presentFrameBuffer` now draws into a
+claimed window's swapchain, and `reset` stays empty — swapchains are claimed
+with vsync and SDL recreates them on resize, so no flag is left to act on.
 
 ### Original plan for this phase
 
@@ -240,25 +241,73 @@ it isolates renderer bugs from swapchain bugs.
 
 ---
 
-## Phase 3 — windowing and present
+## Phase 3 — windowing and present — **DONE**
 
-- SDL3 adapter branch: `SDL_ClaimWindowForGPUDevice` per window against one
-  shared device (replaces the shared-GL-context arrangement; MultiWindow gets
-  simpler).
-- `presentFrameBuffer` equivalent. **Keep the rotation ring-shift verbatim** —
-  the per-corner UV permutation in `bgfx_gl.cpp:932-945` is correct and
-  API-independent.
+- [x] `VisageIntegrationTests` 694 assertions, and 229/229 ctest, on both
+      backends from one tree
+- [x] 12/12 examples run and match the GL backend on Windows — 7 are
+      pixel-identical, the rest differ only by animation phase
+- [x] `Paths`, `Bloom`, `PostEffects`, `BlendModes` given extra scrutiny
+- [x] Window resize (swapchain recreation), graceful close (swapchain release)
+      and two simultaneous swapchains on one device
 
-- [ ] `VisageIntegrationTests` 694 assertions pass
-- [ ] All 12 examples run and screenshot-match the GL backend on Windows
-- [ ] `Paths`, `Bloom`, `PostEffects`, `BlendModes` given extra scrutiny — the
-      multi-pass render-to-texture chains are where barrier/pass-structure bugs
-      surface
+`WindowSdl3` no longer creates a GL context under `-DVISAGE_SDL_GPU=ON`; it
+claims the window against `Renderer::gpuDevice()` and `swapBuffers()` becomes a
+no-op, because submitting the command buffer that acquired the swapchain
+texture *is* the swap. `VISAGE_SDL_GPU` moved to a directory-wide definition —
+the windowing layer needs it too, and only the graphics target had it.
 
-Live shader editing needs a decision here: link SDL_shadercross at runtime to
-keep `ShaderCache::swapShader` working (`graphics_caches.h:45`), or make
-`LiveShaderEditing` a desktop-only example. Runtime linking is the better
-answer if the Pi build can afford the dependency.
+Claiming is deferred to the first `makeContextCurrent()` rather than done in
+`initialize()`: the renderer builds its device *from* the first window, so no
+device exists while that window is starting. Releasing is explicit in
+`close()` — SDL_GPU only watches `WINDOW_PIXEL_SIZE_CHANGED`, so a swapchain
+would otherwise outlive its surface.
+
+Presenting reuses `vs_full_screen_texture` + `fs_sample` unchanged: that pair
+already takes `(x, y, u, v)` packed in one vec4 and does a plain texture read,
+so there is no present-only shader. All four rotations sit in one static vertex
+buffer, so a present is a draw with no upload.
+
+### The rotation ring shift does carry over — but V does not
+
+`SDL_SetGPUViewport` submits a **negative-height viewport**
+(`SDL_gpu_vulkan.c:7489`, "Viewport flip for consistency with other backends"),
+so SDL_GPU's clip space is y-up exactly like GL and `NDC (-1,-1)` is the
+bottom-left of the destination on both. The screen corners are identical.
+
+What differs is the *source*: SDL_GPU textures are top-down. Inverting the
+ring's V makes ring *i* denote the same **image** corner as it does on GL,
+and then the permutation and its direction are unchanged. Flipping V without
+also re-deriving the direction would have silently run rotation
+counter-clockwise.
+
+### Three things the examples caught
+
+- **Only the library shaders had been switched to blobs.** `examples/` still
+  embedded raw `.glsl`, which the gpu backend rejects, so every example using
+  a custom shader rendered black. `ShaderTexture` was entirely blank and
+  `LiveShaderEditing` lost its preview pane.
+- **`PostEffects` crashes on a resize to a portrait window** — a single
+  `SetWindowPos` to 500x800 is enough, and it reproduces identically on the
+  **gl** backend (`0xC0000005`, sometimes `0xC0000374` heap corruption). Not a
+  port regression; `Bloom` survives the same resize, so it is not the shared
+  downsample chain. Untriaged.
+- **`ShaderTexture` never animated, on either backend.** `ShaderQuad::draw`
+  re-invalidates itself, but the texture and tints are written from the
+  application's `onDraw`, which nothing re-invalidated — so the shader re-ran
+  every frame on a frozen signal. Fixed in the example.
+
+### Decisions taken
+
+**Live shader editing is a gl-backend feature.** `LiveShaderEditing` is
+excluded from `VISAGE_SDL_GPU` builds rather than linking glslang at runtime:
+it is a development tool, the gl backend is staying alive as the pixel-test
+reference anyway, and the Pi does not carry a GLSL compiler for it. The
+rendering path itself works — only `ShaderCache::swapShader` on GLSL text
+cannot.
+
+`AudioVisualizer` is excluded from `VISAGE_SDL_GPU` builds too; it drives GL
+compute directly and is ported in phase 4.
 
 ---
 
@@ -266,9 +315,13 @@ answer if the Pi build can afford the dependency.
 
 - The `onDrawBackground` composite path, now with app and UI sharing one
   `SDL_GPUDevice` — the app renders into the swapchain texture in an earlier
-  pass, visage composites over it with `LOADOP_LOAD`.
+  pass, visage composites over it with `LOADOP_LOAD`. The present pipeline
+  already takes `LOADOP_LOAD` when `blend` is set; what is missing is the
+  application's earlier pass.
 - Port `examples/AudioVisualizer` to use xlib's `fft_r2c.comp` /
-  `fft_complex.comp` directly instead of the GL translation.
+  `fft_complex.comp` directly instead of the GL translation. It is excluded
+  from `VISAGE_SDL_GPU` builds until then — drop it from `SKIPPED_EXAMPLES` in
+  `examples/CMakeLists.txt` to bring it back.
 - **macOS gains compute.** The permanent CPU-only fallback assumption from the
   GL plan is void — Metal has compute. Update the self-check status line
   accordingly.
@@ -291,4 +344,4 @@ the device's supported formats.
 | Pass structure wrong → dirty-region flicker | Phase 3, looks like a compositing bug | `LOADOP_LOAD` everywhere; test with a partial-redraw example |
 | v3dv miscompiles a shader the desktop accepts | Phase 5 | Pixel tests are the net — that is what the 1169 assertions are for |
 | Uniform block std140 padding mismatch | Phase 2, silently wrong pixels | All 11 members are `vec4`, so padding is trivially correct — do not add a `float` member later |
-| shadercross runtime dependency on Pi | Phase 3 | Fall back to desktop-only live editing |
+| ~~shadercross runtime dependency on Pi~~ | Phase 3 | Resolved: live editing is gl-only, nothing new is linked |

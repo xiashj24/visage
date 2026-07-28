@@ -99,8 +99,9 @@ namespace visage {
     virtual void* nativeHandle() const = 0;
     virtual void windowContentsResized(int width, int height) = 0;
 
-    // The application owns the GL context; these let the app layer make it
-    // current, load GL through it, and present a finished frame.
+    // Hooks for whatever the backend needs before and after drawing a window:
+    // making the application's GL context current and swapping it, or claiming
+    // the window's swapchain. Call both around every frame either way.
     using GlProcAddressGetter = void* (*)(const char*);
     virtual GlProcAddressGetter glProcAddressGetter() const { return nullptr; }
     virtual void makeContextCurrent() { }

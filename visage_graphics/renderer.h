@@ -43,6 +43,11 @@ namespace visage {
     // a hidden window); initialize() must already have run.
     void initializeWindowless();
 
+    // The SDL_GPUDevice rendering goes through, for claiming a window's
+    // swapchain against it or drawing into it from an application. Null before
+    // initialize(), and always null on the OpenGL backend.
+    void* gpuDevice() const;
+
     static void resetResolution(int width, int height) { }
 
     void setScreenshotData(const uint8_t* data, int width, int height, int pitch, bool blue_red);

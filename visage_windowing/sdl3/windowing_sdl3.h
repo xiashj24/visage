@@ -24,23 +24,24 @@
 #include "windowing.h"
 
 struct SDL_Window;
+struct SDL_GPUDevice;
 union SDL_Event;
 
 namespace visage {
   // SDL3 windowing for every platform (Win32/Cocoa/KMSDRM behind SDL).
   //
-  // All windows share one GL context, created with the first window and made
-  // current per window before drawing - this is what lets a single Renderer
-  // serve multiple windows. When the global screen rotation is a quarter
-  // turn, the logical client size reported to visage is the physical drawable
-  // size with the axes swapped, and mouse input is mapped physical->logical;
-  // the rotation itself happens in the graphics present pass.
+  // One Renderer serves every window: on the gl backend they share a single
+  // context made current before drawing, on the gpu backend they each claim a
+  // swapchain against the one shared device. When the global screen rotation
+  // is a quarter turn, the logical client size reported to visage is the
+  // physical drawable size with the axes swapped, and mouse input is mapped
+  // physical->logical; the rotation itself happens in the graphics present pass.
   class WindowSdl3 : public Window {
   public:
     // Creates and owns an SDL window sized in physical pixels.
     WindowSdl3(int x, int y, int width, int height, Decoration decoration);
-    // Wraps an app-created SDL window without taking ownership. The window
-    // must have been created with the OpenGL flag.
+    // Wraps an app-created SDL window without taking ownership. On the gl
+    // backend the window must have been created with the OpenGL flag.
     explicit WindowSdl3(SDL_Window* existing_window);
     ~WindowSdl3() override;
 
@@ -80,6 +81,8 @@ namespace visage {
     bool handleDecorationClick(bool mouse_down, int x, int y);
 
     SDL_Window* window_ = nullptr;
+    // Non-null only once this window's swapchain is claimed against it.
+    SDL_GPUDevice* gpu_device_ = nullptr;
     bool owns_window_ = false;
     Decoration decoration_ = Decoration::Native;
     HitTestResult pressed_decoration_button_ = HitTestResult::Client;
