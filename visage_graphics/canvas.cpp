@@ -111,21 +111,36 @@ namespace visage {
     return submission;
   }
 
+  void Canvas::drawableDimensions(int& width, int& height) const {
+    // The physical drawable is the logical size with width/height swapped on
+    // quarter rotations.
+    width = composite_layer_.width();
+    height = composite_layer_.height();
+    if (screenRotationQuarterTurns(screenRotation()) & 1)
+      std::swap(width, height);
+  }
+
   void Canvas::present() {
     if (!composite_layer_.pairedToWindow())
       return;
 
-    int quarter_turns = screenRotationQuarterTurns(screenRotation());
+    int dst_width = 0, dst_height = 0;
+    drawableDimensions(dst_width, dst_height);
+    bgfx::presentFrameBuffer(composite_layer_.frameBuffer(), dst_width, dst_height,
+                             screenRotationQuarterTurns(screenRotation()), transparent_background_);
+  }
 
-    // The physical drawable is the logical size with width/height swapped on
-    // quarter rotations.
-    int dst_width = composite_layer_.width();
-    int dst_height = composite_layer_.height();
-    if (quarter_turns & 1)
-      std::swap(dst_width, dst_height);
+  WindowRenderTarget Canvas::windowRenderTarget() {
+    if (!composite_layer_.pairedToWindow())
+      return {};
 
-    bgfx::presentFrameBuffer(composite_layer_.frameBuffer(), dst_width, dst_height, quarter_turns,
-                             transparent_background_);
+    bgfx::WindowTarget target = bgfx::acquireWindowTarget(composite_layer_.frameBuffer());
+    WindowRenderTarget result { target.command_buffer, target.texture, target.width, target.height };
+    // The gl backend hands out no target of its own - the application draws
+    // into the default framebuffer - so only the size is left to fill in.
+    if (result.texture == nullptr)
+      drawableDimensions(result.width, result.height);
+    return result;
   }
 
   const Screenshot& Canvas::takeScreenshot() {

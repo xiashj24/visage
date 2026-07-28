@@ -859,6 +859,26 @@ namespace bgfx {
     return nullptr;  // The application owns the GL context on this backend.
   }
 
+  // An application draws into the default framebuffer directly here, so there
+  // is no target to hand out and no compiled kernels to build pipelines from.
+  WindowTarget acquireWindowTarget(FrameBufferHandle) {
+    return {};
+  }
+
+  void* createGpuShader(const Memory* memory) {
+    releaseMemory(memory, true);
+    return nullptr;
+  }
+
+  void destroyGpuShader(void*) { }
+
+  void* createComputePipeline(const Memory* memory) {
+    releaseMemory(memory, true);
+    return nullptr;
+  }
+
+  void destroyComputePipeline(void*) { }
+
   namespace {
     // Present pass: one quad from the window framebuffer's texture to the
     // default framebuffer, rotated by permuting which texture corner each

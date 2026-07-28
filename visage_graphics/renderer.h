@@ -27,6 +27,21 @@
 #include <string>
 
 namespace visage {
+  // Where an application renders content the UI is composited over, handed out
+  // by ApplicationEditor::windowRenderTarget() during onDrawBackground(). On
+  // the SDL_GPU backend these are the SDL_GPUCommandBuffer and SDL_GPUTexture
+  // of the window's swapchain for this frame; the application records its
+  // passes onto that command buffer and must not submit it.
+  //
+  // All null on the OpenGL backend, where the application binds the default
+  // framebuffer itself.
+  struct WindowRenderTarget {
+    void* command_buffer = nullptr;
+    void* texture = nullptr;
+    int width = 0;
+    int height = 0;
+  };
+
   class Renderer {
   public:
     static Renderer& instance();
@@ -51,6 +66,19 @@ namespace visage {
     // What is actually driving the GPU - the SDL_GPU driver name ("vulkan",
     // "metal") or the OpenGL flavour. For diagnostics; do not branch on it.
     const char* backendName() const;
+
+    // Shader objects built from shadertool blobs, for an application drawing
+    // into gpuDevice() with pipelines of its own: an SDL_GPUShader for a
+    // graphics stage and an SDL_GPUComputePipeline for a kernel. Null on the
+    // OpenGL backend, where the application compiles GLSL against its own
+    // context.
+    void* createGpuShader(const void* blob, int size) const;
+    void destroyGpuShader(void* shader) const;
+    void* createComputePipeline(const void* blob, int size) const;
+    void destroyComputePipeline(void* pipeline) const;
+
+    // Why the most recent of those returned null.
+    const char* lastShaderError() const;
 
     static void resetResolution(int width, int height) { }
 

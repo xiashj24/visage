@@ -24,8 +24,8 @@ jobs:
           ctest --output-on-failure
 
   # The compiled shader blobs are committed so the Pi and CI never need glslang.
-  # That only stays safe if they cannot silently drift from the .glsl sources -
-  # a stale blob makes the SDL_GPU backend render differently from the GL one.
+  # That only stays safe if they cannot silently drift from their sources - a
+  # stale blob makes the SDL_GPU backend render differently from the GL one.
   Shaders-Up-To-Date:
     runs-on: windows-latest
     steps:

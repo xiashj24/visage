@@ -26,6 +26,7 @@
 #include "layer.h"
 #include "path.h"
 #include "region.h"
+#include "renderer.h"
 #include "screenshot.h"
 #include "shape_batcher.h"
 #include "svg.h"
@@ -71,6 +72,13 @@ namespace visage {
     // per frame after submit(), right before the buffer swap. No-op unless
     // paired to a window.
     void present();
+
+    // What the application draws into between submit() and present(), when it
+    // renders its own content under the UI. Empty unless paired to a window.
+    WindowRenderTarget windowRenderTarget();
+
+    // Size of what present() puts on screen, in physical pixels.
+    void drawableDimensions(int& width, int& height) const;
 
     // Leaves pixels no region drew transparent and composites the finished
     // frame over the window's existing contents, so an application can render

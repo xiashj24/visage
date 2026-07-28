@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "visage_graphics/renderer.h"
 #include "visage_ui/frame.h"
 
 namespace visage {
@@ -60,6 +61,11 @@ namespace visage {
     // the window, for an application rendering its own content underneath.
     // Only visible with setTransparentBackground(true).
     auto& onDrawBackground() { return on_draw_background_; }
+
+    // What that application renders into. Only valid during an
+    // onDrawBackground() callback, and only on the SDL_GPU backend - on OpenGL
+    // it is empty and the application binds the default framebuffer itself.
+    WindowRenderTarget windowRenderTarget();
 
     // Makes areas the UI does not cover transparent so the window shows what
     // onDrawBackground() rendered.

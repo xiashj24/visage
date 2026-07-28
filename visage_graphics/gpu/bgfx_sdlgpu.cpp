@@ -71,18 +71,32 @@ namespace bgfx {
     // ---- shadertool blob ----------------------------------------------------
 
     constexpr uint32_t kBlobMagic = 0x53475356;  // "VSGS"
-    constexpr uint32_t kBlobVersion = 2;
+    constexpr uint32_t kBlobVersion = 3;
+
+    enum class BlobStage : uint32_t { Vertex, Fragment, Compute };
 
     struct ParsedBlob {
       bool valid = false;
-      bool is_fragment = false;
+      BlobStage stage = BlobStage::Vertex;
       uint32_t num_samplers = 0;
       uint32_t num_uniform_buffers = 0;
       std::vector<std::string> uniform_names;
       std::vector<std::string> sampler_names;
+      // Compute only, zero otherwise.
+      uint32_t num_readonly_storage_textures = 0;
+      uint32_t num_readonly_storage_buffers = 0;
+      uint32_t num_readwrite_storage_textures = 0;
+      uint32_t num_readwrite_storage_buffers = 0;
+      uint32_t threadcount[3] = { 1, 1, 1 };
       const uint8_t* code = nullptr;
       uint32_t code_size = 0;
       SDL_GPUShaderFormat format = SDL_GPU_SHADERFORMAT_INVALID;
+
+      bool isFragment() const { return stage == BlobStage::Fragment; }
+      // SPIRV-Cross renames main to main0 on the way to MSL.
+      const char* entrypoint() const {
+        return format == SDL_GPU_SHADERFORMAT_MSL ? "main0" : "main";
+      }
     };
 
     std::vector<std::string> readNames(const uint8_t*& cursor, uint32_t count) {
@@ -98,7 +112,7 @@ namespace bgfx {
 
     ParsedBlob parseBlob(const uint8_t* data, uint32_t size, SDL_GPUShaderFormat available) {
       ParsedBlob blob;
-      constexpr uint32_t kHeaderWords = 11;
+      constexpr uint32_t kHeaderWords = 18;
       if (size < kHeaderWords * sizeof(uint32_t))
         return blob;
 
@@ -107,9 +121,16 @@ namespace bgfx {
       if (header[0] != kBlobMagic || header[1] != kBlobVersion)
         return blob;
 
-      blob.is_fragment = header[2] != 0;
+      blob.stage = static_cast<BlobStage>(header[2]);
       blob.num_samplers = header[3];
       blob.num_uniform_buffers = header[4];
+      blob.num_readonly_storage_textures = header[11];
+      blob.num_readonly_storage_buffers = header[12];
+      blob.num_readwrite_storage_textures = header[13];
+      blob.num_readwrite_storage_buffers = header[14];
+      blob.threadcount[0] = header[15];
+      blob.threadcount[1] = header[16];
+      blob.threadcount[2] = header[17];
 
       const uint8_t* cursor = data + sizeof(header);
       blob.uniform_names = readNames(cursor, header[5]);
@@ -595,9 +616,9 @@ namespace bgfx {
     SDL_GPUShaderCreateInfo info {};
     info.code = blob.code;
     info.code_size = blob.code_size;
-    info.entrypoint = "main";
+    info.entrypoint = blob.entrypoint();
     info.format = blob.format;
-    info.stage = blob.is_fragment ? SDL_GPU_SHADERSTAGE_FRAGMENT : SDL_GPU_SHADERSTAGE_VERTEX;
+    info.stage = blob.isFragment() ? SDL_GPU_SHADERSTAGE_FRAGMENT : SDL_GPU_SHADERSTAGE_VERTEX;
     info.num_samplers = blob.num_samplers;
     info.num_uniform_buffers = blob.num_uniform_buffers;
 
@@ -610,9 +631,65 @@ namespace bgfx {
     }
 
     ShaderHandle handle;
-    handle.idx = g_shaders.create({ shader, blob.is_fragment, std::move(blob.uniform_names),
+    handle.idx = g_shaders.create({ shader, blob.isFragment(), std::move(blob.uniform_names),
                                     std::move(blob.sampler_names), blob.num_uniform_buffers > 0 });
     return handle;
+  }
+
+  void* createGpuShader(const Memory* memory) {
+    ShaderHandle handle = createShader(memory);
+    if (!isValid(handle))
+      return nullptr;
+
+    // The application owns the shader from here; the slot only held it so
+    // createShader could stay the one place a blob turns into a stage.
+    SDL_GPUShader* shader = g_shaders.get(handle.idx).shader;
+    g_shaders.release(handle.idx);
+    return shader;
+  }
+
+  void destroyGpuShader(void* shader) {
+    if (shader)
+      SDL_ReleaseGPUShader(g_state.device, static_cast<SDL_GPUShader*>(shader));
+  }
+
+  void* createComputePipeline(const Memory* memory) {
+    // The parse only points into `memory`, so it has to outlive the create.
+    ParsedBlob blob = parseBlob(memory->data, memory->size, g_state.shader_formats);
+    if (!blob.valid || blob.stage != BlobStage::Compute) {
+      g_state.last_shader_error = "Shader blob is not a compute kernel for this backend";
+      VISAGE_LOG(g_state.last_shader_error.c_str());
+      releaseMemory(memory, true);
+      return nullptr;
+    }
+
+    SDL_GPUComputePipelineCreateInfo info {};
+    info.code = blob.code;
+    info.code_size = blob.code_size;
+    info.entrypoint = blob.entrypoint();
+    info.format = blob.format;
+    info.num_samplers = blob.num_samplers;
+    info.num_readonly_storage_textures = blob.num_readonly_storage_textures;
+    info.num_readonly_storage_buffers = blob.num_readonly_storage_buffers;
+    info.num_readwrite_storage_textures = blob.num_readwrite_storage_textures;
+    info.num_readwrite_storage_buffers = blob.num_readwrite_storage_buffers;
+    info.num_uniform_buffers = blob.num_uniform_buffers;
+    info.threadcount_x = blob.threadcount[0];
+    info.threadcount_y = blob.threadcount[1];
+    info.threadcount_z = blob.threadcount[2];
+
+    SDL_GPUComputePipeline* pipeline = SDL_CreateGPUComputePipeline(g_state.device, &info);
+    releaseMemory(memory, true);
+    if (pipeline == nullptr) {
+      g_state.last_shader_error = SDL_GetError();
+      VISAGE_LOG(String("SDL_CreateGPUComputePipeline failed: ") + g_state.last_shader_error.c_str());
+    }
+    return pipeline;
+  }
+
+  void destroyComputePipeline(void* pipeline) {
+    if (pipeline)
+      SDL_ReleaseGPUComputePipeline(g_state.device, static_cast<SDL_GPUComputePipeline*>(pipeline));
   }
 
   ProgramHandle createProgram(ShaderHandle vertex_shader, ShaderHandle fragment_shader,
@@ -1203,6 +1280,35 @@ namespace bgfx {
 
     PresentResources g_present;
 
+    // A swapchain texture is acquired against one command buffer and presented
+    // when that buffer is submitted, so an application drawing underneath the
+    // UI and the composite pass have to share both.
+    struct PendingWindowTarget {
+      SDL_Window* window = nullptr;
+      SDL_GPUCommandBuffer* command_buffer = nullptr;
+      SDL_GPUTexture* texture = nullptr;
+      uint32_t width = 0;
+      uint32_t height = 0;
+    };
+
+    PendingWindowTarget g_pending_target;
+
+    // Acquiring blocks until the swapchain is ready, which is what paces the
+    // frame loop now that there is no buffer swap to wait on.
+    void acquireSwapchain(SDL_Window* window) {
+      // Nothing drew into an earlier window's texture, but its command buffer
+      // still has to go somewhere.
+      if (g_pending_target.command_buffer)
+        SDL_SubmitGPUCommandBuffer(g_pending_target.command_buffer);
+
+      g_pending_target = {};
+      g_pending_target.window = window;
+      g_pending_target.command_buffer = SDL_AcquireGPUCommandBuffer(g_state.device);
+      SDL_WaitAndAcquireGPUSwapchainTexture(g_pending_target.command_buffer, window,
+                                            &g_pending_target.texture, &g_pending_target.width,
+                                            &g_pending_target.height);
+    }
+
     // Screen corners of a triangle strip: BL, BR, TL, TR. Texture corners are
     // a ring in the same rotational order, so a quarter turn is a ring shift.
     // V runs opposite the gl backend's table because SDL_GPU textures are
@@ -1303,6 +1409,29 @@ namespace bgfx {
     }
   }
 
+  WindowTarget acquireWindowTarget(FrameBufferHandle handle) {
+    if (!isValid(handle))
+      return {};
+
+    FrameBufferResource& resource = g_framebuffers.get(handle.idx);
+    if (resource.window == nullptr)
+      return {};
+
+    // The UI's own draws were recorded before this call, so they belong on the
+    // queue before whatever the application is about to record.
+    executeCommands();
+
+    if (g_pending_target.window != resource.window)
+      acquireSwapchain(resource.window);
+
+    WindowTarget target;
+    target.command_buffer = g_pending_target.command_buffer;
+    target.texture = g_pending_target.texture;
+    target.width = static_cast<uint16_t>(g_pending_target.width);
+    target.height = static_cast<uint16_t>(g_pending_target.height);
+    return target;
+  }
+
   void presentFrameBuffer(FrameBufferHandle handle, uint16_t dst_width, uint16_t dst_height,
                           int rotation_quarter_turns, bool blend) {
     if (!isValid(handle))
@@ -1316,11 +1445,13 @@ namespace bgfx {
     // recorded.
     executeCommands();
 
-    SDL_GPUCommandBuffer* command_buffer = SDL_AcquireGPUCommandBuffer(g_state.device);
-    // Blocks until the swapchain is ready, which is what paces the frame loop
-    // now that there is no buffer swap to wait on.
-    SDL_GPUTexture* swapchain = nullptr;
-    SDL_WaitAndAcquireGPUSwapchainTexture(command_buffer, resource.window, &swapchain, nullptr, nullptr);
+    if (g_pending_target.window != resource.window)
+      acquireSwapchain(resource.window);
+
+    // Consumed here: submitting this buffer is the present.
+    SDL_GPUCommandBuffer* command_buffer = g_pending_target.command_buffer;
+    SDL_GPUTexture* swapchain = g_pending_target.texture;
+    g_pending_target = {};
 
     SDL_GPUGraphicsPipeline* pipeline = nullptr;
     if (swapchain) {

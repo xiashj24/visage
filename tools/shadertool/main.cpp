@@ -6,6 +6,11 @@
 // The .glsl sources stay plain GLSL 330/300es so the OpenGL backend can keep
 // compiling them verbatim at runtime. Everything Vulkan requires - explicit
 // locations, descriptor sets, a std140 uniform block - is injected here.
+//
+// .vert / .frag / .comp are compiled with none of that: they are already
+// Vulkan GLSL and declare their own sets and bindings. That is for an
+// application driving SDL_GPU itself, which owns its descriptor layout and
+// would only be fighting the injection.
 
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
@@ -51,7 +56,9 @@ namespace {
   constexpr int kFragmentUniformSet = 3;
 
   constexpr uint32_t kBlobMagic = 0x53475356;  // "VSGS"
-  constexpr uint32_t kBlobVersion = 2;
+  constexpr uint32_t kBlobVersion = 3;
+
+  enum class Stage : uint32_t { Vertex, Fragment, Compute };
 
   // Effect shaders are authored to Shadertoy's convention - the one with a
   // corpus large enough that a third party needs no visage documentation.
@@ -102,10 +109,24 @@ void main() {
 )GLSL";
 
   struct Shader {
-    bool is_fragment = false;
+    Stage stage = Stage::Fragment;
     std::string body;                    // source with declarations stripped
     std::vector<std::string> uniforms;   // std140 block order
     std::vector<std::string> samplers;   // binding order
+
+    bool isFragment() const { return stage == Stage::Fragment; }
+  };
+
+  // What SDL_GPUComputePipelineCreateInfo needs, all reflected rather than
+  // declared - including the workgroup size, which the dispatch has to match.
+  struct ComputeInfo {
+    uint32_t num_samplers = 0;
+    uint32_t num_readonly_storage_textures = 0;
+    uint32_t num_readonly_storage_buffers = 0;
+    uint32_t num_readwrite_storage_textures = 0;
+    uint32_t num_readwrite_storage_buffers = 0;
+    uint32_t num_uniform_buffers = 0;
+    uint32_t threadcount[3] = { 1, 1, 1 };
   };
 
   std::string readFile(const fs::path& path) {
@@ -152,7 +173,7 @@ void main() {
 
     if (matchDeclaration(line, "uniform", type, name)) {
       if (type == "sampler2D") {
-        if (!shader.is_fragment) {
+        if (!shader.isFragment()) {
           error = "sampler in a vertex shader is not supported: " + name;
           return false;
         }
@@ -218,7 +239,7 @@ void main() {
     if (shader.uniforms.empty())
       return {};
 
-    int set = shader.is_fragment ? kFragmentUniformSet : kVertexUniformSet;
+    int set = shader.isFragment() ? kFragmentUniformSet : kVertexUniformSet;
     std::ostringstream block;
     block << "layout(set = " << set << ", binding = 0, std140) uniform VisageUniforms {\n";
     for (const std::string& name : shader.uniforms)
@@ -281,14 +302,15 @@ void main() {
     return true;
   }
 
-  bool transpileToMsl(const std::vector<uint32_t>& spirv, bool is_fragment, std::string& msl) {
+  bool transpileToMsl(const std::vector<uint32_t>& spirv, Stage stage, std::string& msl) {
     SDL_ShaderCross_SPIRV_Info info;
     SDL_zero(info);
     info.bytecode = reinterpret_cast<const Uint8*>(spirv.data());
     info.bytecode_size = spirv.size() * sizeof(uint32_t);
     info.entrypoint = "main";
-    info.shader_stage = is_fragment ? SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT :
-                                      SDL_SHADERCROSS_SHADERSTAGE_VERTEX;
+    info.shader_stage = stage == Stage::Compute  ? SDL_SHADERCROSS_SHADERSTAGE_COMPUTE :
+                        stage == Stage::Fragment ? SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT :
+                                                   SDL_SHADERCROSS_SHADERSTAGE_VERTEX;
 
     void* out = SDL_ShaderCross_TranspileMSLFromSPIRV(&info);
     if (out == nullptr)
@@ -318,7 +340,8 @@ void main() {
   // is the gradient atlas for a library shader quad and the audio texture for a
   // third-party effect. The backend binds by name, not by position.
   std::string packBlob(const Shader& shader, const std::vector<uint32_t>& spirv,
-                       const std::string& msl, uint32_t num_samplers, uint32_t num_uniform_buffers) {
+                       const std::string& msl, uint32_t num_samplers, uint32_t num_uniform_buffers,
+                       const ComputeInfo& compute) {
     const std::string uniform_names = packNames(shader.uniforms);
     const std::string sampler_names = packNames(shader.samplers);
 
@@ -326,7 +349,7 @@ void main() {
     std::string blob;
     appendUint(blob, kBlobMagic);
     appendUint(blob, kBlobVersion);
-    appendUint(blob, shader.is_fragment ? 1u : 0u);
+    appendUint(blob, static_cast<uint32_t>(shader.stage));
     appendUint(blob, num_samplers);
     appendUint(blob, num_uniform_buffers);
     appendUint(blob, static_cast<uint32_t>(shader.uniforms.size()));
@@ -335,6 +358,14 @@ void main() {
     appendUint(blob, static_cast<uint32_t>(sampler_names.size()));
     appendUint(blob, spirv_bytes);
     appendUint(blob, static_cast<uint32_t>(msl.size()));
+    // Zero for a graphics stage, so the header is one fixed size.
+    appendUint(blob, compute.num_readonly_storage_textures);
+    appendUint(blob, compute.num_readonly_storage_buffers);
+    appendUint(blob, compute.num_readwrite_storage_textures);
+    appendUint(blob, compute.num_readwrite_storage_buffers);
+    appendUint(blob, compute.threadcount[0]);
+    appendUint(blob, compute.threadcount[1]);
+    appendUint(blob, compute.threadcount[2]);
     blob.append(uniform_names);
     blob.append(sampler_names);
     while (blob.size() % 4 != 0)  // SPIR-V must stay 4-byte aligned for the loader.
@@ -357,59 +388,104 @@ void main() {
     if (stem == "shader_utils")
       return true;  // Injected into every shader, never compiled alone.
 
-    // A vs_ prefix is the only way to get a vertex shader; third-party effects
-    // are fragment-only and need no prefix.
+    const std::string extension = input.extension().string();
+    const bool verbatim = extension != ".glsl";
+
     Shader shader;
-    shader.is_fragment = stem.rfind("vs_", 0) != 0;
+    if (extension == ".comp")
+      shader.stage = Stage::Compute;
+    else if (extension == ".vert")
+      shader.stage = Stage::Vertex;
+    else if (extension == ".frag")
+      shader.stage = Stage::Fragment;
+    else {
+      // A vs_ prefix is the only way to get a vertex shader; third-party
+      // effects are fragment-only and need no prefix.
+      shader.stage = stem.rfind("vs_", 0) == 0 ? Stage::Vertex : Stage::Fragment;
+    }
 
     const std::string body = readFile(input);
-    const bool is_effect = shader.is_fragment && isEffectShader(body);
+    const bool is_effect = !verbatim && shader.isFragment() && isEffectShader(body);
 
-    std::string preamble, epilogue;
-    if (is_effect) {
-      preamble = kEffectPreamble;
-      // Only declare the audio sampler when the shader reaches for it - an
-      // unbound sampler is a validation error.
-      if (body.find("iChannel0") != std::string::npos ||
-          body.find("spectrum") != std::string::npos || body.find("waveform") != std::string::npos)
-        preamble += kAudioPreamble;
-      preamble += kShadertoyPreamble;
-      epilogue = kShadertoyEpilogue;
+    std::string source;
+    if (verbatim)
+      source = body;
+    else {
+      std::string preamble, epilogue;
+      if (is_effect) {
+        preamble = kEffectPreamble;
+        // Only declare the audio sampler when the shader reaches for it - an
+        // unbound sampler is a validation error.
+        if (body.find("iChannel0") != std::string::npos ||
+            body.find("spectrum") != std::string::npos ||
+            body.find("waveform") != std::string::npos)
+          preamble += kAudioPreamble;
+        preamble += kShadertoyPreamble;
+        epilogue = kShadertoyEpilogue;
+      }
+
+      // #line 1 puts the body back at line 1 so compile errors match what a
+      // live shader editor shows.
+      std::string error;
+      if (!transform(utils + preamble + "\n#line 1\n" + body + epilogue, shader, error)) {
+        std::fprintf(stderr, "[shadertool] %s: %s\n", stem.c_str(), error.c_str());
+        return false;
+      }
+      source = "#version 450\n" + uniformBlock(shader) + shader.body;
     }
 
-    // #line 1 puts the body back at line 1 so compile errors match what a live
-    // shader editor shows.
-    std::string error;
-    if (!transform(utils + preamble + "\n#line 1\n" + body + epilogue, shader, error)) {
-      std::fprintf(stderr, "[shadertool] %s: %s\n", stem.c_str(), error.c_str());
-      return false;
-    }
-
-    const std::string source = "#version 450\n" + uniformBlock(shader) + shader.body;
-
+    const EShLanguage language = shader.stage == Stage::Compute  ? EShLangCompute :
+                                 shader.stage == Stage::Fragment ? EShLangFragment :
+                                                                   EShLangVertex;
     std::vector<uint32_t> spirv;
     std::string log;
-    if (!compileToSpirv(shader.is_fragment ? EShLangFragment : EShLangVertex, source, spirv, log)) {
+    if (!compileToSpirv(language, source, spirv, log)) {
       std::fprintf(stderr, "[shadertool] %s: GLSL->SPIR-V failed:\n%s\n", stem.c_str(), log.c_str());
       return false;
     }
 
-    // Reflect rather than assume: glslang drops a uniform block nothing reads.
-    SDL_ShaderCross_GraphicsShaderMetadata* metadata =
-        SDL_ShaderCross_ReflectGraphicsSPIRV(reinterpret_cast<const Uint8*>(spirv.data()),
-                                             spirv.size() * sizeof(uint32_t), 0);
-    if (metadata == nullptr) {
-      std::fprintf(stderr, "[shadertool] %s: reflection failed: %s\n", stem.c_str(), SDL_GetError());
-      return false;
+    // Reflect rather than assume: glslang drops a uniform block nothing reads,
+    // and a dispatch has to match the workgroup size the source declared.
+    uint32_t num_samplers = 0;
+    uint32_t num_uniform_buffers = 0;
+    ComputeInfo compute;
+    if (shader.stage == Stage::Compute) {
+      SDL_ShaderCross_ComputePipelineMetadata* metadata =
+          SDL_ShaderCross_ReflectComputeSPIRV(reinterpret_cast<const Uint8*>(spirv.data()),
+                                              spirv.size() * sizeof(uint32_t), 0);
+      if (metadata == nullptr) {
+        std::fprintf(stderr, "[shadertool] %s: reflection failed: %s\n", stem.c_str(), SDL_GetError());
+        return false;
+      }
+      num_samplers = metadata->num_samplers;
+      num_uniform_buffers = metadata->num_uniform_buffers;
+      compute.num_readonly_storage_textures = metadata->num_readonly_storage_textures;
+      compute.num_readonly_storage_buffers = metadata->num_readonly_storage_buffers;
+      compute.num_readwrite_storage_textures = metadata->num_readwrite_storage_textures;
+      compute.num_readwrite_storage_buffers = metadata->num_readwrite_storage_buffers;
+      compute.threadcount[0] = metadata->threadcount_x;
+      compute.threadcount[1] = metadata->threadcount_y;
+      compute.threadcount[2] = metadata->threadcount_z;
+      SDL_free(metadata);
     }
-    const uint32_t num_samplers = metadata->resource_info.num_samplers;
-    const uint32_t num_uniform_buffers = metadata->resource_info.num_uniform_buffers;
-    SDL_free(metadata);
+    else {
+      SDL_ShaderCross_GraphicsShaderMetadata* metadata =
+          SDL_ShaderCross_ReflectGraphicsSPIRV(reinterpret_cast<const Uint8*>(spirv.data()),
+                                               spirv.size() * sizeof(uint32_t), 0);
+      if (metadata == nullptr) {
+        std::fprintf(stderr, "[shadertool] %s: reflection failed: %s\n", stem.c_str(), SDL_GetError());
+        return false;
+      }
+      num_samplers = metadata->resource_info.num_samplers;
+      num_uniform_buffers = metadata->resource_info.num_uniform_buffers;
+      SDL_free(metadata);
+    }
 
     // A declared-but-unused sampler gets dropped, leaving the survivors on
     // non-contiguous bindings that SDL_GPU cannot express. Fail loudly here
-    // rather than mis-bind at runtime.
-    if (num_samplers != shader.samplers.size()) {
+    // rather than mis-bind at runtime. Verbatim sources declare their own
+    // bindings, so there is nothing to cross-check.
+    if (!verbatim && num_samplers != shader.samplers.size()) {
       std::fprintf(stderr,
                    "[shadertool] %s: declares %zu sampler(s) but %u survive - remove the unused "
                    "one, bindings must stay contiguous from 0\n",
@@ -418,19 +494,21 @@ void main() {
     }
 
     std::string msl;
-    if (!transpileToMsl(spirv, shader.is_fragment, msl)) {
+    if (!transpileToMsl(spirv, shader.stage, msl)) {
       std::fprintf(stderr, "[shadertool] %s: SPIR-V->MSL failed: %s\n", stem.c_str(), SDL_GetError());
       return false;
     }
 
-    if (!writeFile(out_dir / stem, packBlob(shader, spirv, msl, num_samplers, num_uniform_buffers))) {
+    if (!writeFile(out_dir / stem,
+                   packBlob(shader, spirv, msl, num_samplers, num_uniform_buffers, compute))) {
       std::fprintf(stderr, "[shadertool] %s: failed to write blob\n", stem.c_str());
       return false;
     }
 
+    const char* kind = verbatim ? (shader.stage == Stage::Compute ? "compute" : "verbatim") :
+                                  (is_effect ? "effect" : "library");
     std::printf("[shadertool] %-28s %-9s %u uniform(s), %u sampler(s), %zu B SPIR-V, %zu B MSL\n",
-                stem.c_str(), is_effect ? "effect" : "library",
-                static_cast<unsigned>(shader.uniforms.size()), num_samplers,
+                stem.c_str(), kind, static_cast<unsigned>(shader.uniforms.size()), num_samplers,
                 spirv.size() * sizeof(uint32_t), msl.size());
     return true;
   }
@@ -458,7 +536,9 @@ int main(int argc, char** argv) {
 
   std::vector<fs::path> inputs;
   for (const auto& entry : fs::directory_iterator(src_dir)) {
-    if (entry.is_regular_file() && entry.path().extension() == ".glsl")
+    const std::string extension = entry.path().extension().string();
+    if (entry.is_regular_file() &&
+        (extension == ".glsl" || extension == ".vert" || extension == ".frag" || extension == ".comp"))
       inputs.push_back(entry.path());
   }
   std::sort(inputs.begin(), inputs.end());  // Deterministic output ordering.

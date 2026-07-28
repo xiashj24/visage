@@ -86,6 +86,26 @@ namespace visage {
     return bgfx::getRendererName(bgfx::getRendererType());
   }
 
+  void* Renderer::createGpuShader(const void* blob, int size) const {
+    return bgfx::createGpuShader(bgfx::copy(blob, size));
+  }
+
+  void Renderer::destroyGpuShader(void* shader) const {
+    bgfx::destroyGpuShader(shader);
+  }
+
+  void* Renderer::createComputePipeline(const void* blob, int size) const {
+    return bgfx::createComputePipeline(bgfx::copy(blob, size));
+  }
+
+  void Renderer::destroyComputePipeline(void* pipeline) const {
+    bgfx::destroyComputePipeline(pipeline);
+  }
+
+  const char* Renderer::lastShaderError() const {
+    return bgfx::lastShaderError();
+  }
+
   void Renderer::setScreenshotData(const uint8_t* data, int width, int height, int pitch, bool blue_red) {
     screenshot_ = Screenshot(data, width, height, pitch, blue_red);
   }

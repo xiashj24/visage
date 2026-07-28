@@ -65,9 +65,14 @@ set(VISAGE_SHADER_OUT ${VISAGE_SHADER_SRC}/compiled)
 set(EXAMPLE_SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../../examples/shaders)
 set(EXAMPLE_SHADER_OUT ${EXAMPLE_SHADER_SRC}/compiled)
 
+# .vert/.frag/.comp are compiled verbatim, for an application that drives
+# SDL_GPU itself and owns its own descriptor layout.
 file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS
   ${VISAGE_SHADER_SRC}/*.glsl
   ${EXAMPLE_SHADER_SRC}/*.glsl
+  ${EXAMPLE_SHADER_SRC}/*.vert
+  ${EXAMPLE_SHADER_SRC}/*.frag
+  ${EXAMPLE_SHADER_SRC}/*.comp
 )
 
 add_custom_target(shaders

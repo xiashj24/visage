@@ -229,6 +229,31 @@ namespace bgfx {
   // gl backend, where the application owns the context instead.
   void* gpuDevice();
 
+  // Where an application draws content the UI is composited over. On the gpu
+  // backend, acquiring the window's swapchain texture is the only way to draw
+  // into it, and it can only happen once per frame - so presentFrameBuffer()
+  // reuses whatever this handed out. Everything recorded so far is flushed
+  // first, which puts the application's pass after the UI's own draws.
+  //
+  // All null on the gl backend: there the application binds the default
+  // framebuffer itself.
+  struct WindowTarget {
+    void* command_buffer = nullptr;  // SDL_GPUCommandBuffer*
+    void* texture = nullptr;         // SDL_GPUTexture*
+    uint16_t width = 0;
+    uint16_t height = 0;
+  };
+  WindowTarget acquireWindowTarget(FrameBufferHandle handle);
+
+  // Shader objects for an application drawing into gpuDevice() with pipelines
+  // of its own: an SDL_GPUShader for a graphics stage and an
+  // SDL_GPUComputePipeline for a kernel, both from a shadertool blob. Null on
+  // the gl backend, where the application compiles GLSL itself.
+  void* createGpuShader(const Memory* memory);
+  void destroyGpuShader(void* shader);
+  void* createComputePipeline(const Memory* memory);
+  void destroyComputePipeline(void* pipeline);
+
   // Draws a window framebuffer's texture into the default framebuffer as one
   // full-screen quad, rotated by `rotation_quarter_turns` (0-3, clockwise).
   // Call once per frame right before the buffer swap; the destination size is

@@ -136,6 +136,10 @@ namespace visage {
     redraw();
   }
 
+  WindowRenderTarget ApplicationEditor::windowRenderTarget() {
+    return canvas_->windowRenderTarget();
+  }
+
   void ApplicationEditor::setTransparentBackground(bool transparent) {
     canvas_->setTransparentBackground(transparent);
     redraw();
