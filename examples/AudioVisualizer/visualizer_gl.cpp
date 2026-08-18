@@ -66,8 +66,28 @@ uniform sampler2D s_audio;
 uniform vec2 u_resolution;
 uniform float u_time;
 uniform float u_amplitude;
+uniform int u_rotation;  // screen rotation in quarter turns
 
 const float kBins = 512.0;
+
+// The application draws into the window surface, and visage's present pass
+// rotates only the UI layer it composites on top - so without this the picture
+// below it stays the way the panel is wired while the interface turns.
+//
+// This is the present pass's own mapping, not a guess at it: its screen corners
+// ring BL, BR, TR, TL against texture corners in the same order, and a quarter
+// turn shifts that ring, which for one turn puts the image's top edge along the
+// screen's right edge. Feeding screen position in gives logical position back.
+// Kept identical to viz_spectrum.frag, which the gpu backend uses instead.
+vec2 logicalUv(vec2 uv, int turns) {
+  if (turns == 1)
+    return vec2(1.0 - uv.y, uv.x);
+  if (turns == 2)
+    return vec2(1.0 - uv.x, 1.0 - uv.y);
+  if (turns == 3)
+    return vec2(uv.y, 1.0 - uv.x);
+  return uv;
+}
 
 // Rows: 0/1 = smoothed spectrum L/R, 2/3 = waveform L/R. R32F is not
 // filterable without an extension, so bins are fetched and blended by hand.
@@ -86,7 +106,7 @@ float binForX(float x) {
 }
 
 void main() {
-  vec2 uv = gl_FragCoord.xy / u_resolution;
+  vec2 uv = logicalUv(gl_FragCoord.xy / u_resolution, u_rotation);
   float bin = binForX(uv.x);
   float left = audioRow(bin, 0);
   float right = audioRow(bin, 1);
@@ -233,6 +253,7 @@ void main() {
     GLint u_resolution = -1;
     GLint u_time = -1;
     GLint u_amplitude = -1;
+    GLint u_rotation = -1;
     GLint u_audio = -1;
     GLint u_norm_factor = -1;
     GLint u_db_floor = -1;
@@ -271,6 +292,7 @@ void main() {
     resources_->u_resolution = gl.getUniformLocation(resources_->render_program, "u_resolution");
     resources_->u_time = gl.getUniformLocation(resources_->render_program, "u_time");
     resources_->u_amplitude = gl.getUniformLocation(resources_->render_program, "u_amplitude");
+    resources_->u_rotation = gl.getUniformLocation(resources_->render_program, "u_rotation");
     resources_->u_audio = gl.getUniformLocation(resources_->render_program, "s_audio");
 
     gl.genVertexArrays(1, &resources_->vao);
@@ -442,6 +464,10 @@ void main() {
                  static_cast<float>(target.height));
     gl.uniform1f(resources_->u_time, seconds);
     gl.uniform1f(resources_->u_amplitude, std::min(amplitude_, 1.0f));
+    // Resolution stays physical, matching gl_FragCoord; the shader rotates the
+    // normalized coordinates it derives from them into the UI's logical space.
+    gl.uniform1i(resources_->u_rotation,
+                 visage::screenRotationQuarterTurns(visage::screenRotation()));
     gl.activeTexture(GL_TEXTURE0);
     gl.bindTexture(GL_TEXTURE_2D, resources_->texture);
     gl.uniform1i(resources_->u_audio, 0);

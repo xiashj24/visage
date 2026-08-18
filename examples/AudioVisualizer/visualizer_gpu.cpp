@@ -63,11 +63,15 @@ namespace viz {
       float release;
     };
 
-    // std140 layout of viz_spectrum.frag's Params block.
+    // std140 layout of viz_spectrum.frag's Params block. std140 rounds the block
+    // up to a multiple of 16, so the tail is padded explicitly rather than
+    // leaving the push read past the end of this struct.
     struct DrawParams {
       float resolution[2];
       float time;
       float amplitude;
+      float rotation;
+      float padding[3] = {};
     };
 
     SDL_GPUBuffer* createBuffer(SDL_GPUDevice* device, SDL_GPUBufferUsageFlags usage, int floats) {
@@ -489,8 +493,12 @@ namespace viz {
     binding.sampler = resources.sampler;
     SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
 
+    // Resolution stays physical, matching gl_FragCoord; the shader rotates the
+    // normalized coordinates it derives from them into the UI's logical space.
+    const float turns = static_cast<float>(
+        visage::screenRotationQuarterTurns(visage::screenRotation()));
     const DrawParams params { { static_cast<float>(target.width), static_cast<float>(target.height) },
-                              seconds, std::min(amplitude_, 1.0f) };
+                              seconds, std::min(amplitude_, 1.0f), turns };
     SDL_PushGPUFragmentUniformData(resources.command_buffer, 0, &params, sizeof(params));
 
     SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);

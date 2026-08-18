@@ -15,9 +15,28 @@ layout(set = 3, binding = 0, std140) uniform Params {
   vec2 u_resolution;
   float u_time;
   float u_amplitude;
+  float u_rotation;  // screen rotation in quarter turns
 };
 
 const float kBins = 512.0;
+
+// The application draws into the window surface, and visage's present pass
+// rotates only the UI layer it composites on top - so without this the picture
+// below it stays the way the panel is wired while the interface turns.
+//
+// This is the present pass's own mapping, not a guess at it: its screen corners
+// ring BL, BR, TR, TL against texture corners in the same order, and a quarter
+// turn shifts that ring, which for one turn puts the image's top edge along the
+// screen's right edge. Feeding screen position in gives logical position back.
+vec2 logicalUv(vec2 uv, int turns) {
+  if (turns == 1)
+    return vec2(1.0 - uv.y, uv.x);
+  if (turns == 2)
+    return vec2(1.0 - uv.x, 1.0 - uv.y);
+  if (turns == 3)
+    return vec2(uv.y, 1.0 - uv.x);
+  return uv;
+}
 
 vec2 audioRow(float bin, int row) {
   float clamped = clamp(bin, 0.0, kBins - 1.0);
@@ -37,6 +56,7 @@ void main() {
   // gl_FragCoord is y-down here; the picture below is written y-up.
   vec2 uv = gl_FragCoord.xy / u_resolution;
   uv.y = 1.0 - uv.y;
+  uv = logicalUv(uv, int(u_rotation));
 
   vec2 spectrum = audioRow(binForX(uv.x), 0);
 
