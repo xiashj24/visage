@@ -8,6 +8,8 @@ xcuserdata
 xcshareddata
 *.xcworkspace
 build
+build-shadertool/
+build-mac/
 .clang_complete
 .vs
 .vscode
