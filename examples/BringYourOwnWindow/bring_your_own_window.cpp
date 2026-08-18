@@ -27,6 +27,7 @@
 
 int runExample() {
   std::unique_ptr<visage::Window> window = visage::createWindow(800, 800);
+  visage::setScreenRotation(visage::ScreenRotation::Rotate90);
 
   window->makeContextCurrent();
   visage::Renderer::instance().initialize(window->glProcAddressGetter());

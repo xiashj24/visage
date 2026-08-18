@@ -23,6 +23,7 @@
 
 int runExample() {
   visage::ApplicationWindow app;
+  visage::setScreenRotation(visage::ScreenRotation::Rotate90);
 
   app.onDraw() = [&app](visage::Canvas& canvas) {
     canvas.setColor(0xff000066);

@@ -152,6 +152,8 @@ private:
 
 int runExample() {
   ExampleEditor editor;
+  visage::setScreenRotation(visage::ScreenRotation::Rotate90);
+
   if (visage::isMobileDevice())
     editor.showMaximized();
   else

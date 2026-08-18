@@ -81,6 +81,7 @@ private:
 
 int runExample() {
   ExampleEditor editor;
+  visage::setScreenRotation(visage::ScreenRotation::Rotate90);
   editor.show(500_px, 200_px);
   editor.runEventLoop();
 

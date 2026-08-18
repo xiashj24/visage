@@ -172,6 +172,7 @@ bool Showcase::keyPress(const visage::KeyEvent& key) {
 
 int runExample() {
   visage::ApplicationWindow editor;
+  visage::setScreenRotation(visage::ScreenRotation::Rotate90);
 
   editor.onDraw() = [&editor](visage::Canvas& canvas) {
     canvas.setColor(BackgroundColor);

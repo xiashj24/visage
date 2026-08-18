@@ -224,6 +224,7 @@ public:
 
 int runExample() {
   visage::ApplicationWindow app;
+  visage::setScreenRotation(visage::ScreenRotation::Rotate90);
 
   app.layout().setFlex(true);
   app.layout().setFlexGap(8);

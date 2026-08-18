@@ -60,6 +60,7 @@ static void fillSpectrum(uint8_t* pixels, float time) {
 
 int runExample() {
   visage::ApplicationWindow app;
+  visage::setScreenRotation(visage::ScreenRotation::Rotate90);
 
   visage::ShaderTexture audio(kBins, kRows);
   visage::ShaderQuad spectrum(resources::shaders::vs_shader_quad,

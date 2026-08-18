@@ -46,6 +46,7 @@ visage::Path starPath(float center_x, float center_y, float radius) {
 
 int runExample() {
   visage::ApplicationWindow app;
+  visage::setScreenRotation(visage::ScreenRotation::Rotate90);
 
   app.onDraw() = [&](visage::Canvas& canvas) {
     canvas.setColor(0xff222222);

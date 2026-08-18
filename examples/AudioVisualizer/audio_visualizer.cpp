@@ -318,6 +318,8 @@ private:
 
 int runExample() {
   AudioVisualizerWindow window;
+  // visage::setScreenRotation(visage::ScreenRotation::Rotate90);
+
   window.show(1100, 640);
   if (!window.initializeVisualizer())
     return 1;
