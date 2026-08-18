@@ -23,6 +23,7 @@
 
 #include "visage_graphics/renderer.h"
 
+#include <cstdio>
 #include <map>
 #include <SDL3/SDL.h>
 #include <vector>
@@ -245,7 +246,8 @@ namespace visage {
     // and the flag would make SDL load Vulkan on the platforms where SDL_GPU
     // is Metal or D3D12.
     const char* video_driver = SDL_GetCurrentVideoDriver();
-    if (video_driver && SDL_strcmp(video_driver, "kmsdrm") == 0)
+    const bool kmsdrm_vulkan = video_driver && SDL_strcmp(video_driver, "kmsdrm") == 0;
+    if (kmsdrm_vulkan)
       flags |= SDL_WINDOW_VULKAN;
 #endif
     if (decoration == Decoration::Client || decoration == Decoration::Popup)
@@ -255,6 +257,22 @@ namespace visage {
     float density = primaryDisplayPixelDensity();
     int window_width = static_cast<int>(std::round(width / density));
     int window_height = static_cast<int>(std::round(height / density));
+
+#if VISAGE_SDL_GPU
+    // A kmsdrm Vulkan surface can only be built on a display mode that already
+    // exists, since vkCreateDisplayModeKHR is unsupported on VideoCore, so a
+    // window of any other size cannot be claimed for the device at all and
+    // nothing is ever presented. The panel is the window on this driver, so take
+    // its mode and ignore the requested size. updateClientSize() then derives
+    // the logical size from it, already swapping the axes on a quarter turn, so
+    // a 480x800 panel rotated 90 degrees gives the UI an 800x480 canvas.
+    if (kmsdrm_vulkan) {
+      if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay())) {
+        window_width = mode->w;
+        window_height = mode->h;
+      }
+    }
+#endif
 
     window_ = SDL_CreateWindow("", window_width, window_height, flags);
     if (window_ == nullptr) {
@@ -319,11 +337,33 @@ namespace visage {
 #if VISAGE_SDL_GPU
     // Deferred, not done in initialize(): the renderer creates the device from
     // the first window, so it does not exist yet while that window is starting.
-    if (gpu_device_ == nullptr && window_) {
+    if (gpu_device_ == nullptr && window_ && !gpu_claim_failed_) {
       gpu_device_ = static_cast<SDL_GPUDevice*>(Renderer::instance().gpuDevice());
       if (gpu_device_ && !SDL_ClaimWindowForGPUDevice(gpu_device_, window_)) {
-        VISAGE_LOG(SDL_GetError());
+        // Once, not once per frame. On kmsdrm the claim builds a Vulkan surface,
+        // which creates an instance and enumerates physical devices, loading
+        // every installed ICD and layer on the way. Retrying that each frame
+        // burns a core, draws nothing, and - with VISAGE_LOG compiled out of a
+        // release build - says nothing either, which reads as a hung process
+        // rather than a failure. It also cannot succeed later: the claim depends
+        // on the window and the device, and neither changes after this point.
+        gpu_claim_failed_ = true;
         gpu_device_ = nullptr;
+        const char* error = SDL_GetError();
+        VISAGE_LOG(error);
+
+        // Unconditional, unlike the diagnostics behind VISAGE_RENDER_INFO:
+        // nothing will ever be presented in this window again, and the size it
+        // reports is usually the reason. A kmsdrm Vulkan surface can only use a
+        // display mode that already exists, so any window that is not the
+        // panel's mode fails here.
+        int pixel_width = 0, pixel_height = 0;
+        SDL_GetWindowSizeInPixels(window_, &pixel_width, &pixel_height);
+        const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
+        std::fprintf(stderr,
+                     "visage: SDL_ClaimWindowForGPUDevice failed: %s"
+                     " (window %dx%d px, display mode %dx%d)\n",
+                     error, pixel_width, pixel_height, mode ? mode->w : 0, mode ? mode->h : 0);
       }
     }
 #else

@@ -83,6 +83,8 @@ namespace visage {
     SDL_Window* window_ = nullptr;
     // Non-null only once this window's swapchain is claimed against it.
     SDL_GPUDevice* gpu_device_ = nullptr;
+    // Set when the claim failed, so it is attempted once rather than per frame.
+    bool gpu_claim_failed_ = false;
     bool owns_window_ = false;
     Decoration decoration_ = Decoration::Native;
     HitTestResult pressed_decoration_button_ = HitTestResult::Client;
