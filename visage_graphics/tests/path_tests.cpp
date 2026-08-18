@@ -21,6 +21,7 @@
 
 #include "visage_graphics/canvas.h"
 #include "visage_graphics/path.h"
+#include "pixel_tolerance.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -29,6 +30,7 @@
 #include <set>
 
 using namespace visage;
+using namespace visage_test;
 
 struct PathTriangle {
   PathTriangle(const Point& a, const Point& b, const Point& c) : points { a, b, c } { }
@@ -74,13 +76,13 @@ TEST_CASE("Degeneracies", "[graphics]") {
       Point p2 = path.subPaths()[0].points[i + 2];
       Point inside = (p0 + p1 + p2) / 3.0f;
       Color sample = screenshot.sample(inside);
-      REQUIRE(sample.hexRed() == 0xff);
+      REQUIRE(sample.hexRed() == channel(0xff));
     }
 
     Color sample_left = screenshot.sample(45, 50);
     Color sample_right = screenshot.sample(55, 50);
-    REQUIRE(sample_left.hexRed() == 0);
-    REQUIRE(sample_right.hexRed() == 0);
+    REQUIRE(sample_left.hexRed() == channel(0));
+    REQUIRE(sample_right.hexRed() == channel(0));
   }
 
   SECTION("Infinity path with points at intersection") {
@@ -102,14 +104,14 @@ TEST_CASE("Degeneracies", "[graphics]") {
     const auto& screenshot = canvas.takeScreenshot();
 
     Color sample_top = screenshot.sample(50, 45);
-    REQUIRE(sample_top.hexRed() == 0xff);
+    REQUIRE(sample_top.hexRed() == channel(0xff));
     Color sample_bottom = screenshot.sample(50, 55);
-    REQUIRE(sample_bottom.hexRed() == 0xff);
+    REQUIRE(sample_bottom.hexRed() == channel(0xff));
 
     Color sample_left = screenshot.sample(45, 50);
-    REQUIRE(sample_left.hexRed() == 0);
+    REQUIRE(sample_left.hexRed() == channel(0));
     Color sample_right = screenshot.sample(55, 50);
-    REQUIRE(sample_right.hexRed() == 0);
+    REQUIRE(sample_right.hexRed() == channel(0));
   }
 
   SECTION("Degeneracy rectangle in rectangle corner") {
@@ -135,8 +137,8 @@ TEST_CASE("Degeneracies", "[graphics]") {
     canvas.submit();
     const auto& screenshot = canvas.takeScreenshot();
 
-    REQUIRE(screenshot.sample(10, 10).hexRed() <= 1);
-    REQUIRE(screenshot.sample(29, 29).hexRed() <= 1);
+    REQUIRE(screenshot.sample(10, 10).hexRed() == channel(0x00));
+    REQUIRE(screenshot.sample(29, 29).hexRed() == channel(0x00));
   }
 
   SECTION("Degeneracy embedded rectangles sharing two points") {
@@ -162,8 +164,8 @@ TEST_CASE("Degeneracies", "[graphics]") {
     canvas.submit();
     const auto& screenshot = canvas.takeScreenshot();
 
-    REQUIRE(screenshot.sample(10, 10).hexRed() <= 1);
-    REQUIRE(screenshot.sample(29, 29).hexRed() <= 1);
+    REQUIRE(screenshot.sample(10, 10).hexRed() == channel(0x00));
+    REQUIRE(screenshot.sample(29, 29).hexRed() == channel(0x00));
   }
 
   SECTION("Degeneracy begin point on existing line") {
@@ -188,9 +190,9 @@ TEST_CASE("Degeneracies", "[graphics]") {
     canvas.submit();
     const auto& screenshot = canvas.takeScreenshot();
 
-    REQUIRE(screenshot.sample(10, 10).hexRed() >= 0xfe);
-    REQUIRE(screenshot.sample(25, 8).hexRed() >= 0xfe);
-    REQUIRE(screenshot.sample(25, 12).hexRed() <= 0x01);
+    REQUIRE(screenshot.sample(10, 10).hexRed() == channel(0xff));
+    REQUIRE(screenshot.sample(25, 8).hexRed() == channel(0xff));
+    REQUIRE(screenshot.sample(25, 12).hexRed() == channel(0x00));
   }
 
   SECTION("Degeneracy begin point on two existing lines") {
@@ -219,11 +221,11 @@ TEST_CASE("Degeneracies", "[graphics]") {
     canvas.submit();
     const auto& screenshot = canvas.takeScreenshot();
 
-    REQUIRE(screenshot.sample(5, 10).hexRed() >= 0xfe);
-    REQUIRE(screenshot.sample(15, 10).hexRed() <= 0x01);
-    REQUIRE(screenshot.sample(25, 10).hexRed() >= 0xfe);
-    REQUIRE(screenshot.sample(35, 10).hexRed() <= 0x01);
-    REQUIRE(screenshot.sample(95, 10).hexRed() >= 0xfe);
+    REQUIRE(screenshot.sample(5, 10).hexRed() == channel(0xff));
+    REQUIRE(screenshot.sample(15, 10).hexRed() == channel(0x00));
+    REQUIRE(screenshot.sample(25, 10).hexRed() == channel(0xff));
+    REQUIRE(screenshot.sample(35, 10).hexRed() == channel(0x00));
+    REQUIRE(screenshot.sample(95, 10).hexRed() == channel(0xff));
   }
 
   SECTION("Vertical cross line degeneracy") {
@@ -246,13 +248,13 @@ TEST_CASE("Degeneracies", "[graphics]") {
     canvas.submit();
     Screenshot screenshot = canvas.takeScreenshot();
 
-    REQUIRE(screenshot.sample(5, 20).hexRed() == 0x00);
-    REQUIRE(screenshot.sample(20, 5).hexRed() == 0x00);
-    REQUIRE(screenshot.sample(20, 20).hexRed() == 0xff);
-    REQUIRE(screenshot.sample(45, 25).hexRed() == 0xff);
-    REQUIRE(screenshot.sample(45, 30).hexRed() == 0x00);
-    REQUIRE(screenshot.sample(45, 20).hexRed() == 0x00);
-    REQUIRE(screenshot.sample(35, 15).hexRed() == 0xff);
-    REQUIRE(screenshot.sample(35, 35).hexRed() == 0xff);
+    REQUIRE(screenshot.sample(5, 20).hexRed() == channel(0x00));
+    REQUIRE(screenshot.sample(20, 5).hexRed() == channel(0x00));
+    REQUIRE(screenshot.sample(20, 20).hexRed() == channel(0xff));
+    REQUIRE(screenshot.sample(45, 25).hexRed() == channel(0xff));
+    REQUIRE(screenshot.sample(45, 30).hexRed() == channel(0x00));
+    REQUIRE(screenshot.sample(45, 20).hexRed() == channel(0x00));
+    REQUIRE(screenshot.sample(35, 15).hexRed() == channel(0xff));
+    REQUIRE(screenshot.sample(35, 35).hexRed() == channel(0xff));
   }
 }

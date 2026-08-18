@@ -22,11 +22,13 @@
 #include "visage_graphics/canvas.h"
 #include "visage_graphics/color.h"
 #include "visage_graphics/gradient.h"
+#include "pixel_tolerance.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 using namespace visage;
+using namespace visage_test;
 using namespace Catch;
 
 class CanvasTestFixture {
@@ -224,22 +226,22 @@ TEST_CASE("Canvas visual validation", "[graphics]") {
     const Screenshot& screenshot = canvas.takeScreenshot();
 
     Color center = screenshot.sample(100, 100);
-    REQUIRE(center.hexRed() == 0xff);
-    REQUIRE(center.hexGreen() == 0x00);
-    REQUIRE(center.hexBlue() == 0x00);
+    REQUIRE(center.hexRed() == channel(0xff));
+    REQUIRE(center.hexGreen() == channel(0x00));
+    REQUIRE(center.hexBlue() == channel(0x00));
     Color top_edge = screenshot.sample(100, 50);
-    REQUIRE(top_edge.hexRed() == 0xff);
+    REQUIRE(top_edge.hexRed() == channel(0xff));
     Color bottom_edge = screenshot.sample(100, 149);
-    REQUIRE(bottom_edge.hexRed() == 0xff);
+    REQUIRE(bottom_edge.hexRed() == channel(0xff));
     Color left_edge = screenshot.sample(50, 100);
-    REQUIRE(left_edge.hexRed() == 0xff);
+    REQUIRE(left_edge.hexRed() == channel(0xff));
     Color right_edge = screenshot.sample(149, 100);
-    REQUIRE(right_edge.hexRed() == 0xff);
+    REQUIRE(right_edge.hexRed() == channel(0xff));
 
     Color background = screenshot.sample(25, 25);
-    REQUIRE(background.hexRed() == 0x00);
-    REQUIRE(background.hexGreen() == 0x00);
-    REQUIRE(background.hexBlue() == 0x00);
+    REQUIRE(background.hexRed() == channel(0x00));
+    REQUIRE(background.hexGreen() == channel(0x00));
+    REQUIRE(background.hexBlue() == channel(0x00));
   }
 
   SECTION("Circle drawing validation") {
@@ -256,17 +258,17 @@ TEST_CASE("Canvas visual validation", "[graphics]") {
     const Screenshot& screenshot = canvas.takeScreenshot();
 
     Color center = screenshot.sample(50, 50);
-    REQUIRE(center.hexGreen() == 0xff);
-    REQUIRE(center.hexRed() == 0x00);
-    REQUIRE(center.hexBlue() == 0x00);
+    REQUIRE(center.hexGreen() == channel(0xff));
+    REQUIRE(center.hexRed() == channel(0x00));
+    REQUIRE(center.hexBlue() == channel(0x00));
 
     Color inside = screenshot.sample(40, 50);
-    REQUIRE(inside.hexGreen() == 0xff);
+    REQUIRE(inside.hexGreen() == channel(0xff));
 
     Color outside = screenshot.sample(100, 100);
-    REQUIRE(outside.hexGreen() == 0x00);
-    REQUIRE(outside.hexRed() == 0x00);
-    REQUIRE(outside.hexBlue() == 0x00);
+    REQUIRE(outside.hexGreen() == channel(0x00));
+    REQUIRE(outside.hexRed() == channel(0x00));
+    REQUIRE(outside.hexBlue() == channel(0x00));
   }
 
   SECTION("Fill operation validation") {
@@ -280,18 +282,18 @@ TEST_CASE("Canvas visual validation", "[graphics]") {
     const Screenshot& screenshot = canvas.takeScreenshot();
 
     Color top_left = screenshot.sample(0, 0);
-    REQUIRE(top_left.hexBlue() == 0xff);
+    REQUIRE(top_left.hexBlue() == channel(0xff));
     Color top_right = screenshot.sample(199, 0);
-    REQUIRE(top_right.hexBlue() == 0xff);
+    REQUIRE(top_right.hexBlue() == channel(0xff));
     Color bottom_left = screenshot.sample(0, 199);
-    REQUIRE(bottom_left.hexBlue() == 0xff);
+    REQUIRE(bottom_left.hexBlue() == channel(0xff));
     Color bottom_right = screenshot.sample(199, 199);
-    REQUIRE(bottom_right.hexBlue() == 0xff);
+    REQUIRE(bottom_right.hexBlue() == channel(0xff));
 
     Color center = screenshot.sample(100, 100);
-    REQUIRE(center.hexBlue() == 0xff);
-    REQUIRE(center.hexRed() == 0x00);
-    REQUIRE(center.hexGreen() == 0x00);
+    REQUIRE(center.hexBlue() == channel(0xff));
+    REQUIRE(center.hexRed() == channel(0x00));
+    REQUIRE(center.hexGreen() == channel(0x00));
   }
 
   SECTION("Multiple shapes composition") {
@@ -314,21 +316,21 @@ TEST_CASE("Canvas visual validation", "[graphics]") {
     const Screenshot& screenshot = canvas.takeScreenshot();
 
     Color red_sample = screenshot.sample(35, 35);
-    REQUIRE(red_sample.hexRed() == 0xff);
-    REQUIRE(red_sample.hexGreen() == 0x00);
+    REQUIRE(red_sample.hexRed() == channel(0xff));
+    REQUIRE(red_sample.hexGreen() == channel(0x00));
 
     Color green_sample = screenshot.sample(100, 100);
-    REQUIRE(green_sample.hexGreen() == 0xff);
-    REQUIRE(green_sample.hexRed() == 0x00);
+    REQUIRE(green_sample.hexGreen() == channel(0xff));
+    REQUIRE(green_sample.hexRed() == channel(0x00));
 
     Color blue_sample = screenshot.sample(150, 45);
-    REQUIRE(blue_sample.hexBlue() == 0xff);
-    REQUIRE(blue_sample.hexRed() == 0x00);
+    REQUIRE(blue_sample.hexBlue() == channel(0xff));
+    REQUIRE(blue_sample.hexRed() == channel(0x00));
 
     Color background = screenshot.sample(5, 5);
-    REQUIRE(background.hexRed() == 0x00);
-    REQUIRE(background.hexGreen() == 0x00);
-    REQUIRE(background.hexBlue() == 0x00);
+    REQUIRE(background.hexRed() == channel(0x00));
+    REQUIRE(background.hexGreen() == channel(0x00));
+    REQUIRE(background.hexBlue() == channel(0x00));
   }
 
   SECTION("Clipping validation") {
@@ -347,16 +349,16 @@ TEST_CASE("Canvas visual validation", "[graphics]") {
     const Screenshot& screenshot = canvas.takeScreenshot();
 
     Color inside = screenshot.sample(100, 100);
-    REQUIRE(inside.hexRed() == 0xff);
+    REQUIRE(inside.hexRed() == channel(0xff));
 
     Color outside_left = screenshot.sample(25, 100);
-    REQUIRE(outside_left.hexRed() == 0x00);
+    REQUIRE(outside_left.hexRed() == channel(0x00));
     Color outside_right = screenshot.sample(175, 100);
-    REQUIRE(outside_right.hexRed() == 0x00);
+    REQUIRE(outside_right.hexRed() == channel(0x00));
     Color outside_top = screenshot.sample(100, 25);
-    REQUIRE(outside_top.hexRed() == 0x00);
+    REQUIRE(outside_top.hexRed() == channel(0x00));
     Color outside_bottom = screenshot.sample(100, 175);
-    REQUIRE(outside_bottom.hexRed() == 0x00);
+    REQUIRE(outside_bottom.hexRed() == channel(0x00));
   }
 }
 
@@ -378,16 +380,16 @@ TEST_CASE("Canvas advanced shape validation", "[graphics]") {
     const Screenshot& screenshot = canvas.takeScreenshot();
 
     Color center = screenshot.sample(100, 100);
-    REQUIRE(center.hexRed() == 0xff);
-    REQUIRE(center.hexGreen() == 0xff);
-    REQUIRE(center.hexBlue() == 0x00);
+    REQUIRE(center.hexRed() == channel(0xff));
+    REQUIRE(center.hexGreen() == channel(0xff));
+    REQUIRE(center.hexBlue() == channel(0x00));
 
     Color corner = screenshot.sample(50, 50);
-    REQUIRE(corner.hexRed() == 0x00);
+    REQUIRE(corner.hexRed() == channel(0x00));
 
     Color edge = screenshot.sample(100, 50);
-    REQUIRE(edge.hexRed() >= 0xfe);
-    REQUIRE(edge.hexGreen() >= 0xfe);
+    REQUIRE(edge.hexRed() == channel(0xff));
+    REQUIRE(edge.hexGreen() == channel(0xff));
   }
 
   SECTION("Rectangle border validation") {
@@ -404,18 +406,18 @@ TEST_CASE("Canvas advanced shape validation", "[graphics]") {
     const Screenshot& screenshot = canvas.takeScreenshot();
 
     Color top_border = screenshot.sample(100, 52);
-    REQUIRE(top_border.hexGreen() == 0xff);
-    REQUIRE(top_border.hexBlue() == 0xff);
-    REQUIRE(top_border.hexRed() == 0x00);
+    REQUIRE(top_border.hexGreen() == channel(0xff));
+    REQUIRE(top_border.hexBlue() == channel(0xff));
+    REQUIRE(top_border.hexRed() == channel(0x00));
 
     Color left_border = screenshot.sample(52, 100);
-    REQUIRE(left_border.hexGreen() == 0xff);
-    REQUIRE(left_border.hexBlue() == 0xff);
+    REQUIRE(left_border.hexGreen() == channel(0xff));
+    REQUIRE(left_border.hexBlue() == channel(0xff));
 
     Color interior = screenshot.sample(100, 100);
-    REQUIRE(interior.hexRed() == 0x00);
-    REQUIRE(interior.hexGreen() == 0x00);
-    REQUIRE(interior.hexBlue() == 0x00);
+    REQUIRE(interior.hexRed() == channel(0x00));
+    REQUIRE(interior.hexGreen() == channel(0x00));
+    REQUIRE(interior.hexBlue() == channel(0x00));
   }
 
   SECTION("Line segment validation") {
@@ -432,22 +434,22 @@ TEST_CASE("Canvas advanced shape validation", "[graphics]") {
     const Screenshot& screenshot = canvas.takeScreenshot();
 
     Color line_start = screenshot.sample(50, 100);
-    REQUIRE(line_start.hexRed() >= 0xfe);
-    REQUIRE(line_start.hexBlue() >= 0xfe);
-    REQUIRE(line_start.hexGreen() == 0x00);
+    REQUIRE(line_start.hexRed() == channel(0xff));
+    REQUIRE(line_start.hexBlue() == channel(0xff));
+    REQUIRE(line_start.hexGreen() == channel(0x00));
 
     Color line_middle = screenshot.sample(100, 100);
-    REQUIRE(line_middle.hexRed() == 0xff);
-    REQUIRE(line_middle.hexBlue() == 0xff);
+    REQUIRE(line_middle.hexRed() == channel(0xff));
+    REQUIRE(line_middle.hexBlue() == channel(0xff));
 
     Color line_end = screenshot.sample(149, 100);
-    REQUIRE(line_end.hexRed() >= 0xfe);
-    REQUIRE(line_end.hexBlue() >= 0xfe);
+    REQUIRE(line_end.hexRed() == channel(0xff));
+    REQUIRE(line_end.hexBlue() == channel(0xff));
 
     Color off_line = screenshot.sample(100, 90);
-    REQUIRE(off_line.hexRed() == 0x00);
-    REQUIRE(off_line.hexGreen() == 0x00);
-    REQUIRE(off_line.hexBlue() == 0x00);
+    REQUIRE(off_line.hexRed() == channel(0x00));
+    REQUIRE(off_line.hexGreen() == channel(0x00));
+    REQUIRE(off_line.hexBlue() == channel(0x00));
   }
 }
 
