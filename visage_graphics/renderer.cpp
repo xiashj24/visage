@@ -24,6 +24,8 @@
 #include "visage_utils/string_utils.h"
 
 #include <bgfx/bgfx.h>
+#include <cstdio>
+#include <cstdlib>
 
 #if !VISAGE_SDL_GPU
 #include "gl/gl_api.h"
@@ -58,6 +60,25 @@ namespace visage {
     swap_chain_supported_ = bgfx::getCaps()->supported & BGFX_CAPS_SWAP_CHAIN;
 
     VISAGE_LOG(String("Renderer: ") + bgfx::getRendererName(bgfx::getRendererType()));
+
+    // Release builds define NDEBUG, which makes VISAGE_LOG a no-op, so the one
+    // question a bring-up on unfamiliar hardware always asks - which driver and
+    // which API version did we actually get? - is unanswerable in exactly the
+    // build worth measuring. Setting VISAGE_RENDER_INFO reports it either way.
+    if (std::getenv("VISAGE_RENDER_INFO")) {
+      std::fprintf(stderr, "Renderer: %s\n", bgfx::getRendererName(bgfx::getRendererType()));
+#if !VISAGE_SDL_GPU
+      const auto string = [](auto name) {
+        const char* value = reinterpret_cast<const char*>(gl.getString(name));
+        return value ? value : "(null)";
+      };
+      std::fprintf(stderr,
+                   "GL_VENDOR: %s\nGL_RENDERER: %s\nGL_VERSION: %s\n"
+                   "GL_SHADING_LANGUAGE_VERSION: %s\n",
+                   string(GL_VENDOR), string(GL_RENDERER), string(GL_VERSION),
+                   string(GL_SHADING_LANGUAGE_VERSION));
+#endif
+    }
 #if !VISAGE_SDL_GPU
     VISAGE_LOG(String("GL_VENDOR: ") + reinterpret_cast<const char*>(gl.getString(GL_VENDOR)));
     VISAGE_LOG(String("GL_RENDERER: ") + reinterpret_cast<const char*>(gl.getString(GL_RENDERER)));

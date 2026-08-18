@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 namespace viz {
   bool Visualizer::initialize(visage::Window* window) {
@@ -65,6 +66,12 @@ namespace viz {
                       static_cast<double>(kernel_agreement_));
       status_ = message;
     }
+
+    // The status line is a widget in the panel, so a bring-up driven over SSH -
+    // the only way to reach a board with no desktop - cannot read the one number
+    // that says whether this GPU's FFT agrees with the CPU.
+    if (std::getenv("VISAGE_RENDER_INFO"))
+      std::fprintf(stderr, "Visualizer: %s\n", status_.c_str());
     return true;
   }
 
