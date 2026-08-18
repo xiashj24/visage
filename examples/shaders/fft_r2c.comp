@@ -15,20 +15,29 @@
 //   O[k] = (Z[k] - conj(Z[M-k])) / (2i)       (FFT of the odd samples)
 //   X[k] = E[k] + W_N^k * O[k],  W_N^k = exp(-2*pi*i*k/N),  k = 0..M-1
 //
-// One workgroup, 512 threads. Both stereo channels share one shared array
-// (L in [0,M), R in [M,2M)); the 256 butterflies of each channel's 512-pt FFT
-// are split across the 512 threads (0..255 -> L, 256..511 -> R). Output is
-// identical to the example's CPU FFT (same Hann window, norm_factor, power-dB
-// mapping and fast-attack / slow-release smoothing) so the two backends match.
+// One workgroup, THREADS threads. Both stereo channels share one shared array
+// (L in [0,M), R in [M,2M)). Each thread runs the same butterfly index for both
+// channels, rather than the old split where 512 threads meant 0..255 -> L and
+// 256..511 -> R: 512 invocations per workgroup is not dispatchable on a
+// Raspberry Pi 4, where V3D reports maxComputeWorkGroupInvocations = 256. That
+// is architectural (16 subgroups of 16 QPU threads), not a driver setting, so
+// the channel split had to become a per-thread loop. Vulkan itself only
+// guarantees 128, so THREADS and local_size_x can drop together to 128 - the
+// strided loops adapt to any THREADS dividing HALF_M, and the sibling GL kernel
+// already uses 128. Output is identical to the example's CPU FFT (same Hann
+// window, norm_factor, power-dB mapping and fast-attack / slow-release
+// smoothing) so the two backends match.
 //
 // Resource binding follows SDL_GPU's compute model: set 0 = read-only storage
 // buffer, set 1 = read-write storage texture then read-write storage buffer,
 // set 2 = uniform buffer.
 
-layout(local_size_x = 512) in;
+layout(local_size_x = 256) in;
 
+const uint  THREADS  = 256u;   // must match local_size_x, and divide HALF_M
 const uint  N        = 1024u;  // real samples per channel (FftSize)
 const uint  M        = 512u;   // packed complex length = N/2 = bins (TexWidth)
+const uint  HALF_M   = 256u;   // M/2 = butterflies per stage, per channel
 const float PI       = 3.14159265358979323846;
 const float INV_LN10 = 0.43429448190325176;  // 1 / ln(10), for log10 via log
 
@@ -90,48 +99,60 @@ vec2 recover_bin(uint base, uint k) {
 }
 
 void main() {
-  uint tid = gl_LocalInvocationID.x;  // 0..511
+  uint tid = gl_LocalInvocationID.x;  // 0..THREADS-1
 
   // Pack z[n] = x[2n] + i*x[2n+1] for each channel, Hann-windowed, stored at
-  // the bit-reversed index (DIT wants bit-reversed input order; M = 2^9).
-  uint rev = bitfieldReverse(tid) >> 23;
-  float w0 = hann(2u * tid);
-  float w1 = hann((2u * tid) + 1u);
-  z[rev] = vec2(in_samples[2u * tid] * w0, in_samples[(2u * tid) + 1u] * w1);
-  z[M + rev] = vec2(in_samples[N + (2u * tid)] * w0,
-                    in_samples[N + (2u * tid) + 1u] * w1);
+  // the bit-reversed index (DIT wants bit-reversed input order; M = 2^9, so the
+  // reversal keeps the low 9 bits).
+  for (uint n = tid; n < M; n += THREADS) {
+    uint rev = bitfieldReverse(n) >> 23;
+    float w0 = hann(2u * n);
+    float w1 = hann((2u * n) + 1u);
+    z[rev] = vec2(in_samples[2u * n] * w0, in_samples[(2u * n) + 1u] * w1);
+    z[M + rev] = vec2(in_samples[N + (2u * n)] * w0,
+                      in_samples[N + (2u * n) + 1u] * w1);
+  }
   barrier();
 
-  // 512-pt radix-2 DIT FFT for both channels: 0..255 -> L, 256..511 -> R.
-  uint base = (tid < 256u) ? 0u : M;
-  uint bf = tid & 255u;  // butterfly index 0..255 within this channel
+  // 512-pt radix-2 DIT FFT, HALF_M butterflies per stage per channel. One
+  // thread runs the same butterfly index for both channels: the two channels
+  // live in disjoint halves of z, and distinct butterfly indices map to
+  // disjoint (i0, i1) pairs, so nothing a thread does back to back aliases.
+  // The barrier stays outside the inner loops - every invocation must reach it
+  // the same number of times, which holds because THREADS divides HALF_M.
   for (uint s = 0u; s < 9u; ++s) {
     uint half_m = 1u << s;
     uint m = half_m << 1u;
-    uint grp = bf / half_m;
-    uint pos = bf % half_m;
-    uint i0 = base + (grp * m) + pos;
-    uint i1 = i0 + half_m;
-    float ang = -2.0 * PI * float(pos) / float(m);
-    vec2 tw = vec2(cos(ang), sin(ang));
-    vec2 a = z[i0];
-    vec2 b = cmul(z[i1], tw);
-    z[i0] = a + b;
-    z[i1] = a - b;
+    for (uint bf = tid; bf < HALF_M; bf += THREADS) {
+      uint grp = bf / half_m;
+      uint pos = bf % half_m;
+      float ang = -2.0 * PI * float(pos) / float(m);
+      vec2 tw = vec2(cos(ang), sin(ang));
+      for (uint c = 0u; c < 2u; ++c) {
+        uint i0 = (c * M) + (grp * m) + pos;
+        uint i1 = i0 + half_m;
+        vec2 a = z[i0];
+        vec2 b = cmul(z[i1], tw);
+        z[i0] = a + b;
+        z[i1] = a - b;
+      }
+    }
     barrier();
   }
 
-  // Split + output. Thread tid owns bin tid (0..M-1) of both channels.
-  uint bin = tid;
-  vec2 xl = recover_bin(0u, bin);
-  vec2 xr = recover_bin(M, bin);
-  float specL = spectrum_value(xl, bin);
-  float specR = spectrum_value(xr, M + bin);
-  imageStore(u_out, ivec2(int(bin), 0), vec4(specL, specR, 0.0, 0.0));
+  // Split + output. Thread tid owns bins tid, tid + THREADS, ... of both
+  // channels. recover_bin only reads z, so the strided walk needs no barrier.
+  for (uint bin = tid; bin < M; bin += THREADS) {
+    vec2 xl = recover_bin(0u, bin);
+    vec2 xr = recover_bin(M, bin);
+    float specL = spectrum_value(xl, bin);
+    float specR = spectrum_value(xr, M + bin);
+    imageStore(u_out, ivec2(int(bin), 0), vec4(specL, specR, 0.0, 0.0));
 
-  // Row 1 = raw waveform: the latest M samples (tail of the time-ordered
-  // window), unwindowed, exactly as the CPU stores them.
-  float waveL = in_samples[M + bin];
-  float waveR = in_samples[N + M + bin];
-  imageStore(u_out, ivec2(int(bin), 1), vec4(waveL, waveR, 0.0, 0.0));
+    // Row 1 = raw waveform: the latest M samples (tail of the time-ordered
+    // window), unwindowed, exactly as the CPU stores them.
+    float waveL = in_samples[M + bin];
+    float waveR = in_samples[N + M + bin];
+    imageStore(u_out, ivec2(int(bin), 1), vec4(waveL, waveR, 0.0, 0.0));
+  }
 }
