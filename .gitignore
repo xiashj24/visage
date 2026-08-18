@@ -1,15 +1,12 @@
 .DS_Store
 .DS_Store?
 VTune\ Profiler\ Results
-cmake-build*
+/*build*/
 *.swp
 *.Trashes
 xcuserdata
 xcshareddata
 *.xcworkspace
-build
-build-shadertool/
-build-mac/
 .clang_complete
 .vs
 .vscode
@@ -39,7 +36,6 @@ Release
 CLAUDE.md
 AGENTS.md
 .claude
-cmake_build
 CMakeLists.txt.user
 CMakeCache.txt
 CMakeFiles
@@ -52,4 +48,3 @@ compile_commands.json
 CTestTestfile.cmake
 _deps
 .idea
-build_*
