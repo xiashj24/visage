@@ -25,6 +25,7 @@
 
 #include <mutex>
 #include <vector>
+#include <cstring>
 
 namespace visage {
   // The audio thread writes pixels while the render thread uploads them, so the
