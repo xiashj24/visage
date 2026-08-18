@@ -1230,6 +1230,10 @@ namespace bgfx {
     return g_state.caps.rendererType;
   }
 
+  // Nothing to latch: the SDL_GPU device belongs to the Renderer, not to a
+  // window, so releasing resources after the last window closes is still valid.
+  void setContextLost(bool lost) { (void)lost; }
+
   bool initBackend() {
     if (g_state.initialized)
       return true;

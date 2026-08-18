@@ -153,6 +153,7 @@ namespace bgfx {
 
     struct BackendState {
       bool initialized = false;
+      bool context_lost = false;
       GLuint vao = 0;
       GLuint streaming_vbo = 0;
       GLuint streaming_ibo = 0;
@@ -342,7 +343,21 @@ namespace bgfx {
   bool isValid(IndexBufferHandle handle) { return handle.idx != kInvalidHandle; }
   bool isValid(VertexBufferHandle handle) { return handle.idx != kInvalidHandle; }
 
+  // Object lifetimes in visage outlive any one window: the atlases and layer
+  // framebuffers hang off a Canvas, and the context is process-wide. When the
+  // last window goes, SDL tears down the EGL display and Mesa unloads the driver
+  // the dispatch table points into, so these handles can no longer be released -
+  // calling through the table segfaults instead. Dropping the calls leaks them,
+  // which costs nothing: the only time this latch is set is on the way out, and
+  // the kernel reclaims the GPU objects with the process.
+  void setContextLost(bool lost) {
+    g_state.context_lost = lost;
+  }
+
   void destroy(ShaderHandle handle) {
+    if (g_state.context_lost)
+      return;
+
     if (!isValid(handle))
       return;
     gl.deleteShader(g_shaders.get(handle.idx).gl_shader);
@@ -350,6 +365,9 @@ namespace bgfx {
   }
 
   void destroy(ProgramHandle handle) {
+    if (g_state.context_lost)
+      return;
+
     if (!isValid(handle))
       return;
     gl.deleteProgram(g_programs.get(handle.idx).gl_program);
@@ -357,12 +375,18 @@ namespace bgfx {
   }
 
   void destroy(UniformHandle handle) {
+    if (g_state.context_lost)
+      return;
+
     if (!isValid(handle))
       return;
     g_uniforms.release(handle.idx);
   }
 
   void destroy(TextureHandle handle) {
+    if (g_state.context_lost)
+      return;
+
     if (!isValid(handle))
       return;
     GLuint texture = g_textures.get(handle.idx).gl_texture;
@@ -371,6 +395,9 @@ namespace bgfx {
   }
 
   void destroy(FrameBufferHandle handle) {
+    if (g_state.context_lost)
+      return;
+
     if (!isValid(handle))
       return;
     FrameBufferResource& resource = g_framebuffers.get(handle.idx);
@@ -380,6 +407,9 @@ namespace bgfx {
   }
 
   void destroy(IndexBufferHandle handle) {
+    if (g_state.context_lost)
+      return;
+
     if (!isValid(handle))
       return;
     GLuint buffer = g_index_buffers.get(handle.idx).gl_buffer;
@@ -388,6 +418,9 @@ namespace bgfx {
   }
 
   void destroy(VertexBufferHandle handle) {
+    if (g_state.context_lost)
+      return;
+
     if (!isValid(handle))
       return;
     GLuint buffer = g_vertex_buffers.get(handle.idx).gl_buffer;

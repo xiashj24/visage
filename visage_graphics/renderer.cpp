@@ -51,6 +51,10 @@ namespace visage {
       error_message_ = "Failed to load OpenGL 3.3 / OpenGL ES 3.0 functions.";
 #endif
       VISAGE_LOG(error_message_.c_str());
+      // Unconditional: without a renderer nothing is ever drawn, and a release
+      // build compiles VISAGE_LOG out, so this is the difference between a
+      // reason and a black window followed by a null dereference.
+      std::fprintf(stderr, "visage: %s\n", error_message_.c_str());
       VISAGE_ASSERT(false);
       return false;
     }
@@ -125,6 +129,10 @@ namespace visage {
 
   const char* Renderer::lastShaderError() const {
     return bgfx::lastShaderError();
+  }
+
+  void Renderer::setContextLost(bool lost) const {
+    bgfx::setContextLost(lost);
   }
 
   void Renderer::setScreenshotData(const uint8_t* data, int width, int height, int pitch, bool blue_red) {

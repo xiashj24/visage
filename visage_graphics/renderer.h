@@ -80,6 +80,10 @@ namespace visage {
     // Why the most recent of those returned null.
     const char* lastShaderError() const;
 
+    // Tell the backend whether the context is gone, so it stops trying to
+    // release GPU resources it can no longer reach. See bgfx::setContextLost().
+    void setContextLost(bool lost) const;
+
     static void resetResolution(int width, int height) { }
 
     void setScreenshotData(const uint8_t* data, int width, int height, int pitch, bool blue_red);

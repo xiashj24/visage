@@ -222,6 +222,12 @@ namespace bgfx {
   // One-time backend setup. The gl backend requires loadGlApi() to have
   // succeeded on the thread whose context is current; the gpu backend creates
   // its own device here.
+  // Whether the rendering context is gone. On the gl backend the driver behind
+  // it is unloaded with the last window, so while this is set every destroy()
+  // is dropped rather than dispatched into nothing. It clears again when a
+  // window brings a live context back.
+  void setContextLost(bool lost);
+
   bool initBackend();
 
   // The gpu backend's SDL_GPUDevice, so the windowing layer can claim windows

@@ -70,6 +70,15 @@ namespace visage {
     }
 #endif
 
+    // Unconditional, unlike the diagnostics behind VISAGE_RENDER_INFO. Each call
+    // guarded by this is a hard failure that leaves nothing on screen, and each
+    // reported only through VISAGE_LOG, which a release build compiles out - so
+    // what reached a developer was a black panel or a null dereference with no
+    // explanation of either.
+    void reportSdlFailure(const char* what) {
+      std::fprintf(stderr, "visage: %s failed: %s\n", what, SDL_GetError());
+    }
+
     void ensureSdlInitialized() {
       static bool initialized = [] {
         // Match native windowing: the click that focuses a window is also
@@ -77,6 +86,7 @@ namespace visage {
         SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
         if (!SDL_Init(SDL_INIT_VIDEO)) {
           VISAGE_LOG(SDL_GetError());
+          reportSdlFailure("SDL_Init(SDL_INIT_VIDEO)");
           VISAGE_ASSERT(false);
           return false;
         }
@@ -277,6 +287,7 @@ namespace visage {
     window_ = SDL_CreateWindow("", window_width, window_height, flags);
     if (window_ == nullptr) {
       VISAGE_LOG(SDL_GetError());
+      reportSdlFailure("SDL_CreateWindow");
       VISAGE_ASSERT(false);
       return;
     }
@@ -303,12 +314,18 @@ namespace visage {
       }
       if (g_gl_context == nullptr) {
         VISAGE_LOG(SDL_GetError());
+        reportSdlFailure("SDL_GL_CreateContext");
         VISAGE_ASSERT(false);
       }
     }
 
     makeContextCurrent();
     SDL_GL_SetSwapInterval(1);
+    // A window is back, so the context is usable again and resources can be
+    // released normally. Without this the latch set in close() would be one-way,
+    // and an application that closes its last window and opens another would
+    // never free a GPU resource again.
+    Renderer::instance().setContextLost(false);
 #endif
 
     if (decoration_ == Decoration::Client)
@@ -666,6 +683,18 @@ namespace visage {
     if (owns_window_)
       SDL_DestroyWindow(window_);
     window_ = nullptr;
+
+#if !VISAGE_SDL_GPU
+    // Destroying the last OpenGL window takes the EGL display with it, and Mesa
+    // unloads the driver that the GL dispatch table points into. The context
+    // here is process-wide and shared, and visage's GPU resources belong to
+    // objects that outlive any single window, so their destructors run after
+    // this point - and would dispatch into an unloaded driver. Tell the backend
+    // to stop releasing them instead. Checked after the erase above so closing
+    // one window of several leaves the others working.
+    if (g_windows.empty())
+      Renderer::instance().setContextLost(true);
+#endif
   }
 
   bool WindowSdl3::isShowing() const {
