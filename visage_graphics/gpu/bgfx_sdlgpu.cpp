@@ -1239,12 +1239,26 @@ namespace bgfx {
       return false;
     }
 
-    SDL_GPUShaderFormat wanted = SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_MSL;
     // Validation layers in debug builds: SDL_GPU misuse is otherwise a silent
     // crash inside the driver.
     bool debug = false;
     VISAGE_ASSERT((debug = true));
-    g_state.device = SDL_CreateGPUDevice(wanted, debug, nullptr);
+
+    // Properties rather than SDL_CreateGPUDevice(): the Pi's V3D does not
+    // support depthClamp, which SDL_GPU otherwise treats as required, so it
+    // passes over V3D and picks llvmpipe instead - software rasterization that
+    // also cannot present to a KMSDRM display. Nothing here clamps depth, so
+    // opting out of the feature costs nothing, and requiring hardware
+    // acceleration turns a silent software fallback into an honest failure.
+    SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_SetBooleanProperty(props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN, true);
+    SDL_SetBooleanProperty(props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_MSL_BOOLEAN, true);
+    SDL_SetBooleanProperty(props, SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN, debug);
+    SDL_SetBooleanProperty(props, SDL_PROP_GPU_DEVICE_CREATE_FEATURE_DEPTH_CLAMPING_BOOLEAN, false);
+    SDL_SetBooleanProperty(props, SDL_PROP_GPU_DEVICE_CREATE_VULKAN_REQUIRE_HARDWARE_ACCELERATION_BOOLEAN,
+                           true);
+    g_state.device = SDL_CreateGPUDeviceWithProperties(props);
+    SDL_DestroyProperties(props);
     if (g_state.device == nullptr) {
       VISAGE_LOG(String("SDL_CreateGPUDevice failed: ") + SDL_GetError());
       return false;

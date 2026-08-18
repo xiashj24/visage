@@ -238,6 +238,15 @@ namespace visage {
 #if !VISAGE_SDL_GPU
     setGlContextAttributes(kPreferredGlMajor, kPreferredGlMinor);
     flags |= SDL_WINDOW_OPENGL;
+#else
+    // Without this, kmsdrm hands the display plane to GBM/EGL and the later
+    // SDL_ClaimWindowForGPUDevice() fails with "Vulkan can't find any
+    // displays". Only kmsdrm needs it: wayland and x11 claim a plain window,
+    // and the flag would make SDL load Vulkan on the platforms where SDL_GPU
+    // is Metal or D3D12.
+    const char* video_driver = SDL_GetCurrentVideoDriver();
+    if (video_driver && SDL_strcmp(video_driver, "kmsdrm") == 0)
+      flags |= SDL_WINDOW_VULKAN;
 #endif
     if (decoration == Decoration::Client || decoration == Decoration::Popup)
       flags |= SDL_WINDOW_BORDERLESS;
