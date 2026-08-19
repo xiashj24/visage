@@ -42,6 +42,7 @@
 #include "visualizer.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <SDL3/SDL_timer.h>
 #include <visage/app.h>
 #include <visage_widgets/button.h>
@@ -269,6 +270,20 @@ public:
     audio_.initialize(&visualizer_);
     // Seed both figures so the comparison is on screen from the first frame.
     visualizer_.measureBackends();
+
+    // Same reason as the status line: these numbers are panel widgets, and the
+    // board this runs on is reached over ssh with no display to read them from.
+    if (std::getenv("VISAGE_RENDER_INFO")) {
+      std::fprintf(stderr, "Visualizer: backend=%s cpu=%.1fus gpu=%.1fus agreement=%.5f\n",
+                   visualizer_.backend() == viz::Visualizer::Backend::Gpu ? "gpu" : "cpu",
+                   visualizer_.cpuMicros(), visualizer_.gpuMicros(),
+                   static_cast<double>(visualizer_.kernelAgreement()));
+      for (int i = 0; i < visualizer_.kernelCount(); ++i) {
+        std::fprintf(stderr, "Visualizer: kernel[%d] %-14s %.1fus%s\n", i,
+                     visualizer_.kernelName(i), visualizer_.kernelMicros(i),
+                     visualizer_.kernelMicros(i) < 0.0 ? " (backend cannot fence GPU time)" : "");
+      }
+    }
     panel_ = std::make_unique<ControlPanel>(visualizer_, audio_);
     addChild(panel_.get());
     resized();

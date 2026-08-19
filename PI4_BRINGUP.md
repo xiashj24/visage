@@ -1,7 +1,18 @@
 # Raspberry Pi 4 bring-up checklist
 
-Nothing in the SDL3 + GLES port has run on a Pi yet. Neither has the GPU FFT
-visualizer.
+Both backends now run on a Pi 4. Results are recorded inline below; the backend
+comparison and the verdict live in `SDLGPU_PORT.md`'s Phase 5.
+
+Two things worth knowing before starting, both learned the hard way:
+
+- **A release build says nothing when it fails.** `VISAGE_LOG` is compiled out
+  under `NDEBUG`, so a failed `SDL_Init`, a failed window claim or a shader error
+  is silent and the symptom arrives later as a black panel or a null dereference.
+  Set **`VISAGE_RENDER_INFO=1`** to get the driver, the API version and the
+  visualizer's own figures on stderr regardless of build type.
+- **Everything can be driven over ssh.** No desktop is needed: the GL suites run
+  under `SDL_VIDEODRIVER=offscreen` and the SDL_GPU ones need no window at all,
+  so stages 1-3, 7 and 8 need nothing attached to the board.
 
 **Two independent things are unverified, and they fail for unrelated reasons:**
 
@@ -47,6 +58,23 @@ sudo apt install -y \
       out and back in
 - [ ] Network reachable to **both** `github.com` (SDL3 release asset) and
       `gitlab.freedesktop.org` (freetype is cloned at configure time)
+- [ ] **SDL_GPU builds only:** `mesa-vulkan-drivers` for v3dv, plus
+      `vulkan-tools` to check it with `vulkaninfo --summary` (expect
+      `V3D 4.2.14.0`, `V3DV Mesa`). This is a *runtime* dependency - SDL vendors
+      the Vulkan headers - so a missing driver does not show up at configure
+      time. Absent from the list above on the board this was written on.
+
+Two packaging traps this list creates:
+
+- `libpulse-dev` pulls in **libpipewire without its config files or daemon**, so
+  every SDL audio init logs `pw.conf | can't load config client.conf` four times
+  before falling through to ALSA. Harmless, and silenced with
+  `SDL_AUDIO_DRIVER=alsa` - which is the right production setting anyway: no
+  daemon, no dlopen, direct ALSA.
+- Installing the dev packages does **not** give you a capture device.
+  `arecord -l` listed none on this board, so the visualizer runs on its test
+  tone. That is not the bare-TTY fallback the stage 7 note describes; it is
+  simply no capture hardware, and no amount of TTY switching changes it.
 
 ---
 
@@ -60,12 +88,17 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-- [ ] Configure output's **`Video drivers:` line contains `kmsdrm`** *and*
+- [x] Configure output's **`Video drivers:` line contains `kmsdrm`** *and*
       `x11` (or `wayland`). **If `kmsdrm` is absent, stop** — go back to stage 0,
       `rm -rf build`, and configure again.
-- [ ] `Audio drivers:` line contains `pulseaudio` or `alsa`
-- [ ] `-- VISAGE: Downloading SDL3 3.4.12` succeeded
-- [ ] Build completes with no errors
+- [x] `Audio drivers:` line contains `pulseaudio` or `alsa`
+- [x] `-- VISAGE: Downloading SDL3 3.4.12` succeeded
+- [x] Build completes with no errors
+
+build warning:
+/home/xiashj/visage/visage_widgets/text_editor.cpp:208:66: note: parameter passing for argument of type ‘std::pair<float, float>’ when C++17 is enabled changed to match C++14 in GCC 10.1
+
+  208 |   std::pair<float, float> TextEditor::indexToPosition(int index) const {
 
 ---
 
@@ -77,8 +110,24 @@ Under the desktop, simplest example first:
 ./build/examples/ExampleBasic 2>&1 | tee /tmp/visage-gl.txt
 ```
 
-- [ ] A window appears: dark blue background, cyan circle in the middle
-- [ ] Record these four log lines (they go to stderr):
+Release builds need `VISAGE_RENDER_INFO=1` for the four lines below to appear at
+all; `2>&1 | tee` alone gets you an empty file.
+
+- [x] A window appears: dark blue background, cyan circle in the middle
+- [x] Record these four log lines (they go to stderr):
+
+```
+GL_VENDOR: Broadcom
+GL_RENDERER: V3D 4.2.14.0
+GL_VERSION: OpenGL ES 3.1 Mesa 26.2.0-1~bpo13+0~rpt3
+GL_SHADING_LANGUAGE_VERSION: OpenGL ES GLSL ES 3.10
+```
+
+**GLES 3.1, so no fallback happened and compute is available.** The SDL_GPU
+build reports `Renderer: vulkan` with `Vulkan Device: V3D 4.2.14.0`; if it ever
+says `llvmpipe` instead, the device selection regressed - see Phase 5.
+
+Original expectation, for reference:
 
 ```
 GL_VENDOR:  ...            expect Broadcom
@@ -105,6 +154,32 @@ ctest --test-dir build --output-on-failure
 - [ ] **229/229 pass.** This is the same count that passes on Windows desktop GL
       and on a real GLES context, so any failure here is a genuine Mesa/v3d
       divergence — the single most valuable thing this whole exercise can find.
+
+>> 3 failures
+          8 - Canvas visual validation (Failed)
+          9 - Canvas advanced shape validation (Failed)
+         44 - Degeneracies (Failed)
+
+**Resolved: 229/229 on both backends.** The same three failed on the gl and
+SDL_GPU backends, on exactly the same assertions, which is what placed the cause
+below both APIs. They were never missing geometry - the samples read 250-254
+where 255 was expected and 5-6 where 0 was, off by 1 to 5 LSBs:
+
+```
+canvas_tests.cpp:233: REQUIRE( bottom_edge.hexRed() == 0xff )   ->  254 == 255
+path_tests.cpp:138:   REQUIRE( sample(10,10).hexRed() <= 1 )    ->    5 <= 1
+```
+
+V3D reports `subPixelPrecisionBits = 6` against the 8 of the desktop parts those
+values were recorded on, so vertex positions snap to a grid four times coarser
+and edge coverage rounds differently. Those three test cases now compare through
+`channel()` in `visage_graphics/tests/pixel_tolerance.h`, a margin of 8. A fourth
+failure - test 10, `Canvas state and position validation` - appears **only on
+llvmpipe** and is not a v3d divergence.
+
+No desktop needed: the gl suites run under `SDL_VIDEODRIVER=offscreen` (real v3d,
+verified against `LIBGL_ALWAYS_SOFTWARE=1`, which is 8x slower) and the SDL_GPU
+suites need no window.
 
 To narrow a failure:
 
@@ -138,18 +213,18 @@ absence of crashes. The ones that probe specific risks:
 | `LiveShaderEditing` | Runtime GLSL compilation and the driver's error log. |
 | `Gradients`, `Layout`, `MouseEvents`, `BringYourOwnWindow` | Baseline. |
 
-- [ ] Basic
-- [ ] BlendModes
-- [ ] Bloom
-- [ ] BringYourOwnWindow
-- [ ] Gradients
-- [ ] Layout
-- [ ] LiveShaderEditing
-- [ ] MouseEvents
-- [ ] MultiWindow
-- [ ] Paths
-- [ ] PostEffects
-- [ ] Showcase
+- [x] Basic
+- [x] BlendModes
+- [x] Bloom
+- [x] BringYourOwnWindow
+- [x] Gradients
+- [x] Layout
+- [x] LiveShaderEditing
+- [x] MouseEvents
+- [x] MultiWindow
+- [x] Paths
+- [x] PostEffects
+- [x] Showcase
 
 (`ClapPlugin` is deliberately not built.)
 
@@ -165,10 +240,10 @@ sudo systemctl isolate multi-user.target     # or: sudo systemctl stop lightdm
 SDL_VIDEODRIVER=kmsdrm ./build/examples/ExampleBasic
 ```
 
-- [ ] Renders full-screen on the panel
-- [ ] Keyboard and mouse/touch reach the app
-- [ ] A few more examples run the same way (`Showcase`, `Paths`)
-- [ ] Exits cleanly and hands the console back
+- [x] Renders full-screen on the panel
+- [x] Keyboard and mouse/touch reach the app
+- [x] A few more examples run the same way (`Showcase`, `Paths`)
+- [x] Exits cleanly and hands the console back
 
 If it fails, force the driver explicitly (as above) rather than relying on
 auto-detection, and turn on SDL's logging:
@@ -189,12 +264,36 @@ so you have to add one line to an example to exercise it — put this before
 visage::setScreenRotation(visage::ScreenRotation::Rotate90);
 ```
 
-- [ ] Rendering is rotated correctly (the present pass does it via per-corner UVs)
-- [ ] **Input lands where you press** — rotation transforms input coordinates too,
+- [x] Rendering is rotated correctly (the present pass does it via per-corner UVs)
+- [x] **Input lands where you press** — rotation transforms input coordinates too,
       and this is the half that is easy to get wrong
-- [ ] Test whichever of `Rotate90` / `Rotate180` / `Rotate270` matches the panel;
+- [x] Test whichever of `Rotate90` / `Rotate180` / `Rotate270` matches the panel;
       test all four if the orientation is not settled
 
+minor issue: the mouse cursor is not rotated properly
+
+Not fixable in visage: SDL draws the cursor on a **hardware DRM cursor plane**
+(`DRM_PLANE_TYPE_CURSOR`, its own GBM buffer), which the display controller
+composites after everything visage produces, and SDL's kmsdrm cursor code has no
+rotation handling at all. Position is still correct - the cursor sits on the
+element it would click, because input goes through the same transform - so only
+the glyph direction and the motion axes are wrong. Options: accept it (the
+product is a touch panel with no cursor), hide the system cursor with
+`visage::setCursorVisible(false)` and draw one as UI content, or use a
+rotationally symmetric dot so orientation stops mattering (a hardware cursor is
+padded into a 64x64 buffer here, so any size up to that works).
+
+To make a connected mouse inert while keeping keyboard input:
+
+```cpp
+app.setIgnoresMouseEvents(true, false);  // false = do not pass to children
+visage::setCursorVisible(false);
+app.setAcceptsKeystrokes(true);
+app.requestKeyboardFocus();              // nothing clicks to set focus for you
+```
+
+`Frame::frameAtPoint` then returns `nullptr` everywhere, so no hover, no clicks,
+and nothing re-shows the cursor.
 ---
 
 ## Stage 7 — the GPU FFT visualizer
@@ -216,34 +315,89 @@ plausible:
 | `compute FFT ready (kernel check unavailable)` | R32F readback unsupported, so the check could not run. Kernel is probably fine but unproven. |
 | `no compute FFT: ...` (SDL_GPU build) | The device's own reason. The kernels want 512 invocations per workgroup, which Vulkan only guarantees to 128, so v3dv refusing them is the first thing to suspect. |
 
-- [ ] Status line recorded
-- [ ] **Click "Measure both (200x)" and record the CPU and GPU microsecond
+- [x] Status line recorded
+- [x] **Click "Measure both (200x)" and record the CPU and GPU microsecond
       figures.** This is the number that decides whether GPU FFT is worth
       keeping at all. Reference on the dev machine (RTX 3080 Ti): **167 µs CPU
       vs 19 µs GPU**. Expect the Pi's CPU figure to be far larger; the GPU figure
       is the one that matters.
-- [ ] Compositing works: the spectrum is visible *through* the translucent panel,
+- [x] Compositing works: the spectrum is visible *through* the translucent panel,
       and the area outside the panel shows the visualizer, not black
-- [ ] Frame rate holds at the panel's refresh rate
-- [ ] Toggle CPU ↔ GPU compute — the picture should look the same either way
+- [x] Frame rate holds at the panel's refresh rate
+- [x] Toggle CPU ↔ GPU compute — the picture should look the same either way
       (the two backends fill the same texture)
-- [ ] SDL_GPU build only: toggle **R2C 512 ↔ complex 1024** and record both
+- [x] SDL_GPU build only: toggle **R2C 512 ↔ complex 1024** and record both
       per-kernel figures. On the dev machine the packed kernel is the slower
       one; whether that survives on v3d is the open question.
+
+Measured, with `VISAGE_RENDER_INFO=1` printing what the panel widgets show:
+
+| | CPU FFT | GPU FFT, main thread | agreement |
+|---|---|---|---|
+| gl / v3d | 153.5 µs | **183.2 µs** | 0.00000 |
+| SDL_GPU / V3D | 218.9 µs | **348.6 µs** | 0.00000 |
+
+**The GPU FFT costs more CPU than the CPU FFT on this hardware, on both
+backends.** `gpuMicros()` excludes the dispatch's own execution, so that column
+is exactly the "work moved off the CPU" figure - and it moves the wrong way,
+1.2x on gl and 1.6x on SDL_GPU. Sample upload, binding setup and submission on a
+1.5 GHz A72 outweigh a 1024-point transform. Against the dev machine's 101.9 µs
+CPU / 14.2 µs GPU, the CPU side scales as expected while dispatch overhead does
+not scale down at all.
+
+So on a Pi 4, **run the analysis on the CPU.** The kernels are correct - the
+agreement column is exact on both backends - they are simply not worth
+dispatching here, and they also spend GPU time and memory bandwidth that a
+fill-heavy UI wants.
+
+Fenced per-kernel GPU time, SDL_GPU only:
+
+```
+kernel[0] R2C 512        92.6 us      <- faster on v3d
+kernel[1] complex 1024  117.5 us
+```
+
+**The packed kernel is the faster of the two here, 1.27x** - the inverse of the
+dev machine, where `SDLGPU_PORT.md` records it as slower and flags the inversion
+as an open question. On v3d, halving the transform beats keeping 512 threads
+busy. The gl backend reports `-1` because GLES 3.1 does not require timer
+queries, so it cannot fence GPU time at all.
 
 Audio note: on a bare TTY the recording device may not open, in which case the
 example falls back to **"Test tone"** automatically. That is expected and the
 visualizer still works; it does not indicate a problem.
+minor issue: audio visualizer picture is not rotated properly
+
+Fixed. The application draws through `windowRenderTarget()` straight into the
+window surface, and only the composite layer passes through the rotating present
+pass - so the UI turned and the spectrum did not. Both visualizer shaders now map
+their own coordinates into logical space with `logicalUv()`, derived from the
+present pass's corner table rather than guessed.
 
 ---
 
 ## Stage 8 — product-shape checks
 
-- [ ] Sustained frame rate over 10+ minutes (Pi 4 thermal throttling)
-- [ ] No memory growth over time
-- [ ] **Run it alongside your actual audio DSP load.** "CPU saved" only means
+- [x] Sustained frame rate over 10+ minutes (Pi 4 thermal throttling) —
+      80,000 frames of the `shapes` scene held **8.133 ms/frame** against 8.286
+      over 120 frames, so no decay. Temperature 53.5 → ~62 °C and flat,
+      `get_throttled=0x0` throughout, ARM pinned at 1500 MHz and V3D at 500 MHz.
+- [x] No memory growth over time — RSS flat at **95,420 kB** for ~17 minutes
+      within one scene. Apparent jumps to 187/256/271 MB are scene *transitions*
+      allocating their own resources (the path atlas, the blur targets), not a
+      leak. Note `--scene NAME` is singular: `--scenes` and a bare positional
+      are both ignored, and a run that silently does all five scenes takes hours
+      because `paths` alone is ~120 ms/frame.
+- [x] **Run it alongside your actual audio DSP load.** "CPU saved" only means
       something when the CPU is contended — this is the measurement that
-      justifies or kills the compute FFT for the product.
+      justifies or kills the compute FFT for the product. Stand-in: busy loops
+      on 0/4/8 threads with the idle share of `/proc/stat` recorded per run, so
+      saturation is verified rather than assumed (77% → 1% → 0% idle). **CPU per
+      frame is flat across all loads** — gl `shapes` 23.4 → 23.7 → 24.4 ms —
+      while wall time grows 26 → 37 → 59 ms. The renderer is scheduling-limited,
+      not throughput-limited, so more GUI threads cannot help; reserve a core for
+      audio instead. Beware: 3 busy threads on a 4-core box leaves the
+      single-threaded renderer a core of its own and measures nothing.
 - [ ] Startup time acceptable (the visualizer runs a 200-iteration benchmark at
       launch; if that hitch is too long on a Pi, drop the call to
       `measureBackends()` in `initializeVisualizer()`)
@@ -254,6 +408,12 @@ visualizer still works; it does not indicate a problem.
 
 | Symptom | Likely cause | Where to look |
 |---|---|---|
+| **Every app fails with `No available video device`** | a previous run still holds DRM master. One leftover process makes every later app fail `SDL_Init`, and the symptom is a null dereference much later, not an error | `fuser -v /dev/dri/card1`. Note `pkill -x` silently matches **nothing** for names over 15 characters, so `ExamplePostEffects` survives a cleanup that appears to work |
+| Nothing on stderr at all, ever | release build: `VISAGE_LOG` is compiled out under `NDEBUG` | run with `VISAGE_RENDER_INFO=1` |
+| App runs, one core pinned, no window, no error | SDL_GPU window claim failing and being retried per frame | fixed; the claim is attempted once and reports both the window and display-mode sizes |
+| `pw.conf can't load config client.conf` ×4 | libpipewire installed without configs or daemon; SDL probes it then falls back to ALSA | harmless; `SDL_AUDIO_DRIVER=alsa` |
+| `MESA: error: destroy dumb object N: Invalid argument` | SDL's kmsdrm Vulkan swapchain and Mesa both release the same scanout buffer at exit. One per swapchain image, SDL_GPU only, after the last frame | upstream; not fixable here. imgui's own SDL_GPU example does it too |
+| Segfault on exit, gl backend | GPU resources outliving the context: Mesa unloads the driver with the last window | fixed by `setContextLost()`; see Phase 5 |
 | `kmsdrm` missing from configure output | dev packages installed after configuring | stage 0, then `rm -rf build` |
 | Path fills mangled / inverted | front-face convention differs on v3d | `glFrontFace(GL_CW)` in `initGlBackend`, `fs_path_fill.glsl` |
 | Blurs blocky or black | `EXT_color_buffer_float` absent → R16F falls back to R8 | `bgfx_gl.cpp` `r16f_renderable` probe |

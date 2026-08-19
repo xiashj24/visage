@@ -413,7 +413,111 @@ one beside it.
 
 ---
 
-## Phase 5 — Raspberry Pi 4
+## Phase 5 — Raspberry Pi 4 — **DONE**
+
+**Verdict: ship the gl backend.** For UI-shaped workloads SDL_GPU costs about
+twice the CPU on v3d, measured in two independent codebases, and every other
+consideration points the same way. Detail below.
+
+### What had to be fixed before it ran at all
+
+Four defects, none visible in a release build because `VISAGE_LOG` compiles out
+under `NDEBUG`:
+
+- **`SDL_CreateGPUDevice()` was silently selecting llvmpipe.** V3D reports
+  `depthClamp = false` and SDL_GPU treats depthClamp as required, so it passed
+  over the GPU and fell back to software rasterization - which also cannot
+  present to a KMSDRM display. The device is now created through properties that
+  opt out of the feature and require hardware acceleration. Nothing in the shim
+  clamps depth. **Any measurement taken before this fix was llvmpipe**, including
+  a first pass at stage 3 that produced a spurious fourth test failure.
+- **A kmsdrm window needs `SDL_WINDOW_VULKAN`**, or SDL hands the display plane
+  to GBM/EGL and the claim fails with "Vulkan can't find any displays".
+- **A kmsdrm window must be the panel's exact mode.** `vkCreateDisplayModeKHR` is
+  unsupported on VideoCore, so SDL can only build a surface on a mode that
+  already exists, and no example requested one. The window now takes the
+  display's mode and `updateClientSize()` derives the logical size from it,
+  already swapping the axes on a quarter turn.
+- **The compute kernels asked for 512 invocations per workgroup.** V3D allows
+  256 - `maxComputeWorkGroupSize = [256,256,256]`, 16 subgroups of 16 QPU
+  threads, architectural and not a driver setting. Phase 4 suspected this and
+  guessed Vulkan's floor of 128; the real ceiling is 256, still half of what the
+  kernels wanted. Both now use strided loops at 256.
+
+The gl backend needed one fix of its own: every example **segfaulted on exit**,
+because Mesa unloads the driver behind the GL dispatch table when SDL destroys
+the last window, while the atlases and layer framebuffers hang off a Canvas that
+outlives it. `setContextLost()` gates the backend's `destroy()` overloads.
+
+### Comparing the two backends
+
+Three UI workloads, all vsync-locked at 60Hz on a 480x800 panel, so **CPU load
+is the metric** - wall time is pinned by the panel either way. Measured from
+`utime+stime` deltas in `/proc/<pid>/stat` over 8 s of steady state:
+
+| workload | gl | SDL_GPU | ratio |
+|---|---|---|---|
+| imgui demo, identical draw code both sides | 7.7% | 14.2% | 1.84x |
+| `ExampleShowcase` | 16.1% | 32.3% | 2.00x |
+| `ExampleAudioVisualizer`, GPU kernels | 19.3% | 28.8% | 1.49x |
+
+The imgui row is the cleanest evidence in the exercise: the same draw code on
+both of its backends, so the difference is renderer overhead alone and nothing to
+do with how this shim is written. Both examples were rebuilt at 480x800 first -
+as shipped they request different sizes, which would have measured window area
+instead. The visualizer's smaller ratio is dilution: a large share of its cost is
+the application's own full-screen shader and the FFT, identical on both sides.
+
+**`VisageBenchmark` disagrees, and it is the benchmark that is wrong for this
+question.** Its `shapes` scene has SDL_GPU 3x *cheaper* on CPU (7.8 ms vs 23.4),
+because it throws thousands of individual primitives and gl's per-draw state
+churn dominates. Real UIs batch into few draw calls and spend their time on fill,
+text and glyphs, where SDL_GPU's fixed per-frame cost is pure loss - visible in
+the same sweep as `gradients` 1.15 ms vs 2.64 and `text` 2.53 vs 4.52. The
+synthetic scene measures the one regime a panel UI does not live in.
+
+Everything else on the ledger also favours gl: runtime GLSL (`LiveShaderEditing`
+builds), no `MESA: error: destroy dumb object` at teardown, and presentation
+through GBM that does not care about the panel's exact mode.
+
+### The compute FFT is a CPU regression here
+
+| | CPU FFT | GPU FFT, main thread |
+|---|---|---|
+| gl / v3d | 153.5 µs | **183.2 µs** |
+| SDL_GPU / V3D | 218.9 µs | **348.6 µs** |
+
+`gpuMicros()` excludes the dispatch's own execution, so it is precisely the
+"work moved off the CPU" figure, and on a Pi 4 it moves the wrong way on both
+backends. Dispatch overhead does not scale down from the dev machine's 14.2 µs
+while the CPU side scales as expected. **Run the analysis on the CPU on this
+hardware.** Agreement is exact (0.00000) on both backends, so the kernels are
+correct - just not worth dispatching.
+
+The per-kernel question this plan left open is answered, and inverted:
+
+```
+kernel[0] R2C 512        92.6 us      <- faster on v3d
+kernel[1] complex 1024  117.5 us
+```
+
+The packed kernel is 1.27x *faster* here, the opposite of the RTX figures above.
+On v3d, halving the transform beats keeping 512 threads busy. The gl backend
+cannot fence GPU time at all - GLES 3.1 does not require timer queries.
+
+### Two findings that outrank the backend choice
+
+- **`paths` costs ~120 ms/frame on both backends**, GPU-bound and almost exactly
+  linear in pixel area (126 ms at 800x480, 33 at 400x240, 9.5 at 200x120;
+  `blocked` scales 4.16x and 4.42x per 4x pixel cut). One pass, one draw of
+  ~1176 additively-blended triangles - so it is fill and overdraw, not pass
+  overhead. The benchmark scene is adversarial by construction, but any
+  full-screen path fill will hurt on v3d regardless of backend.
+- **The renderer is single-threaded and scheduling-limited, not
+  throughput-limited.** CPU per frame is flat across 0/4/8 competing threads
+  while wall time grows. More GUI threads cannot help; reserve a core for audio.
+
+### Original plan for this phase
 
 Re-run `PI4_BRINGUP.md` against the SDL_GPU build. Stages 3 and 4 carry over
 unchanged; stage 2's GL version logging becomes `SDL_GetGPUDeviceDriver()` plus
