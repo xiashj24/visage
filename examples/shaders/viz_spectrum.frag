@@ -18,7 +18,7 @@ layout(set = 3, binding = 0, std140) uniform Params {
   float u_rotation;  // screen rotation in quarter turns
 };
 
-const float kBins = 512.0;
+const float kBins = 1024.0;
 
 // The application draws into the window surface, and visage's present pass
 // rotates only the UI layer it composites on top - so without this the picture
@@ -49,7 +49,7 @@ vec2 audioRow(float bin, int row) {
 
 // Log-frequency axis: bin 2 to bin 480 spread evenly across the width.
 float binForX(float x) {
-  return exp2(mix(1.0, log2(480.0), x));
+  return exp2(mix(1.0, log2(960.0), x));
 }
 
 void main() {

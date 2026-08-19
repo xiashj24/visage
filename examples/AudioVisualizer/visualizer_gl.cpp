@@ -68,7 +68,7 @@ uniform float u_time;
 uniform float u_amplitude;
 uniform int u_rotation;  // screen rotation in quarter turns
 
-const float kBins = 512.0;
+const float kBins = 1024.0;
 
 // The application draws into the window surface, and visage's present pass
 // rotates only the UI layer it composites on top - so without this the picture
@@ -102,7 +102,7 @@ float audioRow(float bin, int row) {
 
 // Log-frequency axis: bin 2 to bin 480 spread evenly across the width.
 float binForX(float x) {
-  return exp2(mix(1.0, log2(480.0), x));
+  return exp2(mix(1.0, log2(960.0), x));
 }
 
 void main() {
@@ -140,8 +140,8 @@ void main() {
     const char* kComputeSource = R"GLSL(
 layout(local_size_x = 128) in;
 
-const uint kFftSize = 1024u;
-const uint kBins = 512u;
+const uint kFftSize = 2048u;
+const uint kBins = 1024u;
 const uint kThreads = 128u;
 const float kPi = 3.141592653589793;
 
@@ -154,7 +154,7 @@ uniform float u_db_floor;
 uniform float u_attack;
 uniform float u_release;
 
-shared vec2 s_data[1024];
+shared vec2 s_data[2048];
 
 void main() {
   uint channel = gl_WorkGroupID.x;
@@ -163,7 +163,7 @@ void main() {
 
   // Bit-reversed windowed load, so the butterflies below run in place.
   for (uint i = thread; i < kFftSize; i += kThreads) {
-    uint source = bitfieldReverse(i) >> 22u;
+    uint source = bitfieldReverse(i) >> 21u;
     float window = 0.5 - 0.5 * cos(2.0 * kPi * float(source) / float(kFftSize));
     s_data[i] = vec2(samples[base + source] * window, 0.0);
   }

@@ -23,7 +23,7 @@
 // through pipelines of its own, recorded onto the command buffer that visage
 // then composites its UI onto - so the two never touch each other's state.
 //
-// The analysis texture is RG32F, 512x2: row 0 = spectrum, row 1 = waveform,
+// The analysis texture is RG32F, kBins x 2: row 0 = spectrum, row 1 = waveform,
 // .x = left and .y = right. That is the layout both compute kernels write and
 // what Shadertoy calls iChannel0, so a third-party effect could read it too.
 
@@ -41,7 +41,7 @@
 namespace viz {
   namespace {
     constexpr int kTextureRows = 2;
-    // One dispatch of one workgroup; the kernels split 512 threads across both
+    // One dispatch of one workgroup; the kernels split 256 threads across both
     // channels and keep the whole transform in shared memory.
     constexpr int kKernelCount = 2;
 
@@ -51,8 +51,8 @@ namespace viz {
     };
 
     const KernelSource kKernels[kKernelCount] = {
-      { "R2C 512", resources::shaders::fft_r2c },
-      { "complex 1024", resources::shaders::fft_complex },
+      { "R2C 1024", resources::shaders::fft_r2c },
+      { "complex 2048", resources::shaders::fft_complex },
     };
 
     // std140 layout of the kernels' Params block.

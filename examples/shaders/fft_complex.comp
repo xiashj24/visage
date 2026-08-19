@@ -1,22 +1,22 @@
 #version 450
 
 // GPU FFT for the AudioVisualizer example, from xlib's shaders/src — the
-// straightforward variant: a full 1024-point COMPLEX FFT per channel with
+// straightforward variant: a full 2048-point COMPLEX FFT per channel with
 // imaginary input = 0. Simpler than the real-to-complex packed kernel
-// (fft_r2c.comp) but does ~2x the work
-// and uses 16 KB of shared memory instead of 8 KB. Kept side-by-side so the two
+// (fft_r2c.comp) but does ~2x the work and uses 32 KB of shared memory instead
+// of 16 KB - which is exactly V3D's maxComputeSharedMemorySize, so 2048 is the
+// largest size this kernel can run on a Pi 4 at all. Kept side-by-side so the two
 // approaches can be compared (see the Visualizer panel's GPU kernel selector).
 //
 // One workgroup, THREADS threads, each running HALF/THREADS radix-2 DIT
 // butterflies per stage for BOTH stereo channels in lockstep, so one invocation
 // owns each output texel of the RG32F audio texture (.x = left, .y = right).
-// The whole transform stays in shared memory across all 10 radix stages in one
+// The whole transform stays in shared memory across all 11 radix stages in one
 // dispatch. Output matches the example's CPU FFT (same Hann window,
 // norm_factor, power-dB mapping and attack/release smoothing) so the backends
 // produce identical results.
 //
-// THREADS is 256 rather than the one-butterfly-per-thread 512, because 512
-// invocations per workgroup is not dispatchable on a Raspberry Pi 4: V3D
+// THREADS is 256 because that is all a Raspberry Pi 4 allows: V3D
 // reports maxComputeWorkGroupInvocations = 256, which is architectural (16
 // subgroups of 16 QPU threads), not a driver setting. Vulkan itself only
 // guarantees 128, so drop THREADS and local_size_x together to 128 if this has
@@ -30,8 +30,8 @@
 layout(local_size_x = 256) in;
 
 const uint  THREADS  = 256u;   // must match local_size_x, and divide HALF
-const uint  N        = 1024u;  // FFT size / FftSize
-const uint  HALF     = 512u;   // N/2 = TexWidth = bin count
+const uint  N        = 2048u;  // FFT size / FftSize
+const uint  HALF     = 1024u;   // N/2 = TexWidth = bin count
 const float PI       = 3.14159265358979323846;
 const float INV_LN10 = 0.43429448190325176;  // 1 / ln(10), for log10 via log
 
@@ -47,8 +47,8 @@ layout(set = 2, binding = 0) uniform Params {
   float release;
 };
 
-shared vec2 shL[1024];
-shared vec2 shR[1024];
+shared vec2 shL[2048];
+shared vec2 shR[2048];
 
 vec2 cmul(vec2 a, vec2 b) {
   return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
@@ -63,7 +63,7 @@ float hann(uint n) {
 // Hann-windowed, imaginary part 0 (DIT wants bit-reversed input order).
 void load(uint k) {
   float w = hann(k);
-  uint rev = bitfieldReverse(k) >> 22;  // reverse the low 10 bits (log2 N = 10)
+  uint rev = bitfieldReverse(k) >> 21;  // reverse the low 11 bits (log2 N = 11)
   shL[rev] = vec2(in_samples[k] * w, 0.0);
   shR[rev] = vec2(in_samples[N + k] * w, 0.0);
 }
@@ -87,16 +87,16 @@ void main() {
     load(k);
   barrier();
 
-  // 10 radix-2 DIT stages, HALF butterflies each. The strided inner loop hands
+  // 11 radix-2 DIT stages, HALF butterflies each. The strided inner loop hands
   // thread tid the butterflies tid, tid + THREADS, ... Every butterfly index
   // maps to its own disjoint (i0, i1) pair, so the ones a single thread runs
   // back to back cannot alias each other, and one barrier per stage still
   // orders the whole workgroup. The barrier stays outside the inner loop: it
   // has to be reached by every invocation the same number of times, and the
   // trip count is uniform only because THREADS divides HALF.
-  for (uint s = 0u; s < 10u; ++s) {
-    uint half_m = 1u << s;   // 1, 2, ..., 512
-    uint m = half_m << 1u;   // 2, 4, ..., 1024
+  for (uint s = 0u; s < 11u; ++s) {
+    uint half_m = 1u << s;   // 1, 2, ..., 1024
+    uint m = half_m << 1u;   // 2, 4, ..., 2048
     for (uint b = tid; b < HALF; b += THREADS) {
       uint grp = b / half_m;
       uint pos = b % half_m;

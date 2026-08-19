@@ -5,11 +5,13 @@
 // this verbatim with no preamble and the example owns the descriptor layout.
 //
 // Real-to-complex packing, the way VkFFT handles real input: each channel's
-// 1024 real samples are packed into a 512-point COMPLEX sequence
-// (z[n] = x[2n] + i*x[2n+1]), transformed with ONE 512-pt radix-2 FFT, then a
-// split / post-processing step recovers the 1024-pt real-FFT bins from the
+// 2048 real samples are packed into a 1024-point COMPLEX sequence
+// (z[n] = x[2n] + i*x[2n+1]), transformed with ONE 1024-pt radix-2 FFT, then a
+// split / post-processing step recovers the 2048-pt real-FFT bins from the
 // half-length spectrum's Hermitian structure. This halves both the transform
-// size and the shared memory (8 KB) versus a full 1024-pt complex FFT.
+// size and the shared memory (16 KB) versus a full 2048-pt complex FFT. That
+// headroom matters on a Pi 4: the complex kernel is already at V3D's 32 KB
+// shared-memory ceiling at this size, while this one could still reach 4096.
 //
 //   E[k] = (Z[k] + conj(Z[M-k])) / 2          (FFT of the even samples)
 //   O[k] = (Z[k] - conj(Z[M-k])) / (2i)       (FFT of the odd samples)
@@ -17,9 +19,9 @@
 //
 // One workgroup, THREADS threads. Both stereo channels share one shared array
 // (L in [0,M), R in [M,2M)). Each thread runs the same butterfly index for both
-// channels, rather than the old split where 512 threads meant 0..255 -> L and
-// 256..511 -> R: 512 invocations per workgroup is not dispatchable on a
-// Raspberry Pi 4, where V3D reports maxComputeWorkGroupInvocations = 256. That
+// channels, rather than one thread per butterfly per channel: a Raspberry Pi 4
+// caps a workgroup at 256 invocations, since V3D reports
+// maxComputeWorkGroupInvocations = 256. That
 // is architectural (16 subgroups of 16 QPU threads), not a driver setting, so
 // the channel split had to become a per-thread loop. Vulkan itself only
 // guarantees 128, so THREADS and local_size_x can drop together to 128 - the
@@ -35,9 +37,9 @@
 layout(local_size_x = 256) in;
 
 const uint  THREADS  = 256u;   // must match local_size_x, and divide HALF_M
-const uint  N        = 1024u;  // real samples per channel (FftSize)
-const uint  M        = 512u;   // packed complex length = N/2 = bins (TexWidth)
-const uint  HALF_M   = 256u;   // M/2 = butterflies per stage, per channel
+const uint  N        = 2048u;  // real samples per channel (FftSize)
+const uint  M        = 1024u;   // packed complex length = N/2 = bins (TexWidth)
+const uint  HALF_M   = 512u;   // M/2 = butterflies per stage, per channel
 const float PI       = 3.14159265358979323846;
 const float INV_LN10 = 0.43429448190325176;  // 1 / ln(10), for log10 via log
 
@@ -60,8 +62,8 @@ layout(set = 2, binding = 0) uniform Params {
   float release;
 };
 
-// Packed 512-pt complex spectra for both channels: L in [0,M), R in [M,2M).
-shared vec2 z[1024];
+// Packed 1024-pt complex spectra for both channels: L in [0,M), R in [M,2M).
+shared vec2 z[2048];
 
 vec2 cmul(vec2 a, vec2 b) {
   return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
@@ -84,7 +86,7 @@ float spectrum_value(vec2 bin, uint env_index) {
   return val;
 }
 
-// Recover one 1024-pt real-FFT bin k (0..M-1) from the natural-order 512-pt
+// Recover one 2048-pt real-FFT bin k (0..M-1) from the natural-order 1024-pt
 // complex spectrum of the packed signal stored at z[base + .].
 vec2 recover_bin(uint base, uint k) {
   uint mk = (M - k) & (M - 1u);                      // (M - k) mod M
@@ -102,10 +104,10 @@ void main() {
   uint tid = gl_LocalInvocationID.x;  // 0..THREADS-1
 
   // Pack z[n] = x[2n] + i*x[2n+1] for each channel, Hann-windowed, stored at
-  // the bit-reversed index (DIT wants bit-reversed input order; M = 2^9, so the
-  // reversal keeps the low 9 bits).
+  // the bit-reversed index (DIT wants bit-reversed input order; M = 2^10, so the
+  // reversal keeps the low 10 bits).
   for (uint n = tid; n < M; n += THREADS) {
-    uint rev = bitfieldReverse(n) >> 23;
+    uint rev = bitfieldReverse(n) >> 22;
     float w0 = hann(2u * n);
     float w1 = hann((2u * n) + 1u);
     z[rev] = vec2(in_samples[2u * n] * w0, in_samples[(2u * n) + 1u] * w1);
@@ -114,13 +116,13 @@ void main() {
   }
   barrier();
 
-  // 512-pt radix-2 DIT FFT, HALF_M butterflies per stage per channel. One
+  // 1024-pt radix-2 DIT FFT, HALF_M butterflies per stage per channel. One
   // thread runs the same butterfly index for both channels: the two channels
   // live in disjoint halves of z, and distinct butterfly indices map to
   // disjoint (i0, i1) pairs, so nothing a thread does back to back aliases.
   // The barrier stays outside the inner loops - every invocation must reach it
   // the same number of times, which holds because THREADS divides HALF_M.
-  for (uint s = 0u; s < 9u; ++s) {
+  for (uint s = 0u; s < 10u; ++s) {
     uint half_m = 1u << s;
     uint m = half_m << 1u;
     for (uint bf = tid; bf < HALF_M; bf += THREADS) {

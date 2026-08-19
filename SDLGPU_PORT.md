@@ -403,9 +403,11 @@ path degrades to the CPU FFT with the driver's message in the status line.
 The last two columns are fenced GPU time per transform, the only per-kernel
 measurement SDL_GPU allows. **The packed real-to-complex kernel is the slower
 of the two here**, which is the opposite of the argument for writing it: half
-the transform, but only 256 of the 512 threads do butterflies for a channel and
-the recovery step diverges. Whether that holds on v3d is a Phase 5 question —
-it is exactly the kind of thing that inverts on a small GPU.
+the transform, but only half the threads do butterflies for a channel and the
+recovery step diverges. Whether that holds on v3d is a Phase 5 question —
+it is exactly the kind of thing that inverts on a small GPU. (It does invert;
+see Phase 5. These figures are from the 512-thread, 1024-point kernels that
+predate the Pi, and are kept as the dev-machine reference.)
 
 The two backends' CPU figures are not comparable to each other (different
 builds, different texture layouts); each column is only meaningful against the
@@ -525,6 +527,49 @@ kernel[1] complex 1024  117.5 us
 The packed kernel is 1.27x *faster* here, the opposite of the RTX figures above.
 On v3d, halving the transform beats keeping 512 threads busy. The gl backend
 cannot fence GPU time at all - GLES 3.1 does not require timer queries.
+
+### Why 2048 is the size, and why it is also the ceiling
+
+The transform is 2048 points per channel. Doubling it from 1024 is what makes
+the compute path worth anything at all, and it is simultaneously the last step
+this GPU can take:
+
+| N | complex kernel (16N bytes) | packed R2C kernel (8N bytes) |
+|---|---|---|
+| 1024 | 16 KB | 8 KB |
+| 2048 | **32 KB - exactly V3D's limit** | 16 KB |
+| 4096 | 64 KB - impossible | **32 KB - exactly the limit** |
+| 8192 | impossible | impossible |
+
+`maxComputeSharedMemorySize` is 32768 on V3D. The complex kernel at 2048 sits on
+that number exactly and was accepted; there is no headroom past it. Going further
+would need a multi-pass FFT split across dispatches, which is a different piece
+of work.
+
+Measured effect of the doubling, three repeats, process CPU time:
+
+| backend | analysis | @1024 | @2048 | per doubling |
+|---|---|---|---|---|
+| gl | GPU compute | 23.5 % | 23.8 % | **+0.2** |
+| gl | CPU | 23.8 % | 25.8 % | **+1.9** |
+| SDL_GPU | GPU compute | 32.3 % | 32.8 % | +0.5 |
+| SDL_GPU | CPU | 31.8 % | 32.9 % | +1.1 |
+
+CPU work grows with N log N while dispatch overhead stays flat, exactly as the
+offload argument predicts - so at 2048 the compute path is finally ahead, by
+about 2 points of one core on gl. Fenced GPU time grew sub-linearly with it:
+R2C 92.6 -> 140.4 µs and complex 117.5 -> 184.9 µs, 1.5x for 2.2x the work.
+
+**But 2 points of a 24 % total is still noise against a DSP budget, and the size
+where it would genuinely matter is the size where the shared memory runs out.**
+That is the durable argument against the compute FFT on this hardware: it cannot
+grow into being clearly worthwhile. Keep the kernels, default to CPU analysis,
+and revisit only on a GPU with more shared memory. Agreement stays exact
+(0.00000) on both backends at 2048, so the kernels are correct at this size.
+
+Each series had one low outlier, so the 2-point gap is only a few times the
+noise band - consistent across both backends and with the mechanism, but not a
+figure to quote to three significant digits.
 
 ### Two findings that outrank the backend choice
 

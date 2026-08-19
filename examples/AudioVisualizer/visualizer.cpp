@@ -40,7 +40,7 @@ namespace viz {
     for (int i = 0; i < kFftSize; ++i) {
       int reversed = 0;
       for (int bit = 0; (1 << bit) < kFftSize; ++bit)
-        reversed |= ((i >> bit) & 1) << (10 - 1 - bit);
+        reversed |= ((i >> bit) & 1) << (kFftBits - 1 - bit);
       bit_reversal_[i] = reversed;
     }
 

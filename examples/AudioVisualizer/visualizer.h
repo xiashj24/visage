@@ -40,7 +40,8 @@ namespace viz {
   // CPU/GPU comparison reads the same either way.
   class Visualizer {
   public:
-    static constexpr int kFftSize = 1024;
+    static constexpr int kFftSize = 2048;
+    static constexpr int kFftBits = 11;  // log2(kFftSize)
     static constexpr int kBins = kFftSize / 2;
     static constexpr int kChannels = 2;
 
