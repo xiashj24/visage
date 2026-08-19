@@ -686,10 +686,25 @@ namespace bgfx {
 
   void setTexture(uint8_t stage, UniformHandle sampler, TextureHandle handle) {
     VISAGE_ASSERT(stage < kMaxTextureStages);
+    const std::string& name = g_uniforms.get(sampler.idx).name;
+
+    // submit() points each sampler at whichever stage carries it, so the same
+    // sampler must never be live on two stages. Callers set textures up before
+    // they know whether they have anything to draw, and a batch that comes out
+    // empty returns without submitting, leaving its bindings behind for the
+    // next draw. The stale stage would then win - the loop assigns in stage
+    // order - and send the sampler to the wrong texture. The newest binding is
+    // the one this draw meant.
+    for (int i = 0; i < kMaxTextureStages; ++i) {
+      PendingTextureBinding& other = g_state.draw.textures[i];
+      if (i != stage && other.bound && other.sampler_name == name)
+        other.bound = false;
+    }
+
     PendingTextureBinding& binding = g_state.draw.textures[stage];
     binding.bound = true;
     binding.gl_texture = g_textures.get(handle.idx).gl_texture;
-    binding.sampler_name = g_uniforms.get(sampler.idx).name;
+    binding.sampler_name = name;
   }
 
   void setVertexBuffer(uint8_t, const TransientVertexBuffer* vertex_buffer) {
