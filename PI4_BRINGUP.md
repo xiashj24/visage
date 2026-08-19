@@ -67,10 +67,11 @@ sudo apt install -y \
 Two packaging traps this list creates:
 
 - `libpulse-dev` pulls in **libpipewire without its config files or daemon**, so
-  every SDL audio init logs `pw.conf | can't load config client.conf` four times
-  before falling through to ALSA. Harmless, and silenced with
-  `SDL_AUDIO_DRIVER=alsa` - which is the right production setting anyway: no
-  daemon, no dlopen, direct ALSA.
+  SDL's audio init used to log `pw.conf | can't load config client.conf` four
+  times before falling through to ALSA. **Already handled**: the build now sets
+  `VISAGE_LINUX_ALSA_ONLY=ON` by default, which builds SDL3 with ALSA as its only
+  audio backend, so there is no pipewire to probe and nothing to set at runtime.
+  `-DVISAGE_LINUX_ALSA_ONLY=OFF` in a fresh build directory restores the others.
 - Installing the dev packages does **not** give you a capture device.
   `arecord -l` listed none on this board, so the visualizer runs on its test
   tone. That is not the bare-TTY fallback the stage 7 note describes; it is

@@ -120,6 +120,31 @@ set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 
+# The Pi is an appliance with no audio daemon, so ALSA direct is what it wants.
+# Leaving the others in also costs noise: SDL probes drivers in order and tries
+# pipewire first, and a board carrying libpipewire without its config files or
+# daemon - which installing libpulse-dev alone produces - logs four lines of
+# "pw.conf | can't load config client.conf" on every startup before falling
+# through to ALSA. Building the other backends out removes the probe instead of
+# silencing it after the fact, and needs nothing set at runtime.
+#
+# VISAGE_LINUX_ALSA_ONLY=OFF is the way back to the other backends, but it needs
+# a build directory that has not been configured yet. FORCE makes turning this
+# on take effect on an existing tree, since SDL caches its own defaults on the
+# first configure and would otherwise keep them; turning it off cannot undo that
+# in place, because restoring "whatever SDL would have chosen" would mean
+# hardcoding SDL's defaults here. Delete the build directory instead.
+if (UNIX AND NOT APPLE)
+  option(VISAGE_LINUX_ALSA_ONLY "Build SDL3 with ALSA as its only audio backend" ON)
+  if (VISAGE_LINUX_ALSA_ONLY)
+    set(SDL_ALSA ON CACHE BOOL "" FORCE)
+    set(SDL_PIPEWIRE OFF CACHE BOOL "" FORCE)
+    set(SDL_PULSEAUDIO OFF CACHE BOOL "" FORCE)
+    set(SDL_JACK OFF CACHE BOOL "" FORCE)
+    set(SDL_SNDIO OFF CACHE BOOL "" FORCE)
+  endif ()
+endif ()
+
 message(STATUS "VISAGE: Downloading SDL3 ${VISAGE_SDL3_VERSION}")
 CPMAddPackage(
   NAME SDL3
