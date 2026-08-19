@@ -330,27 +330,38 @@ plausible:
       per-kernel figures. On the dev machine the packed kernel is the slower
       one; whether that survives on v3d is the open question.
 
-Measured, with `VISAGE_RENDER_INFO=1` printing what the panel widgets show:
+**Do not read the panel's microsecond figures as CPU cost.** They come from
+`microseconds()`, a wall clock, so they include time spent *blocked on the GPU*,
+and `measureBackends()` measures something different again: it runs its 200
+iterations back to back with nothing drawn between them, so the queued GPU work
+drains after the timer stops and never appears in the average. The two numbers
+shown side by side are also not comparable - `render()` only updates the figure
+for the backend currently selected, so the other one is frozen at whatever the
+last batch measured.
 
-| | CPU FFT | GPU FFT, main thread | agreement |
+What that produces on the gl backend, and it looks alarming:
+
+| analysis | live wall-clock figure | process CPU | fps |
 |---|---|---|---|
-| gl / v3d | 153.5 µs | **183.2 µs** | 0.00000 |
-| SDL_GPU / V3D | 218.9 µs | **348.6 µs** | 0.00000 |
+| GPU compute | ~200 µs | 23.4 / 24.0 / 23.5 % | 60.3 |
+| CPU | **~7100 µs** | 24.0 / 24.0 / 23.8 % | 60.3 |
 
-**The GPU FFT costs more CPU than the CPU FFT on this hardware, on both
-backends.** `gpuMicros()` excludes the dispatch's own execution, so that column
-is exactly the "work moved off the CPU" figure - and it moves the wrong way,
-1.2x on gl and 1.6x on SDL_GPU. Sample upload, binding setup and submission on a
-1.5 GHz A72 outweigh a 1024-point transform. Against the dev machine's 101.9 µs
-CPU / 14.2 µs GPU, the CPU side scales as expected while dispatch overhead does
-not scale down at all.
+The 7 ms is a **stall, not work**: `uploadRows()` calls `glTexSubImage2D` on the
+very texture the full-screen spectrum shader is sampling, so the driver blocks
+until the GPU releases it. Process CPU time is flat across the two, and so is
+the frame rate. SDL_GPU shows ~150-290 µs on both paths because its upload goes
+through a staging copy instead, and its process CPU is likewise flat -
+31.8-32.3 % either way.
 
-So on a Pi 4, **run the analysis on the CPU.** The kernels are correct - the
-agreement column is exact on both backends - they are simply not worth
-dispatching here, and they also spend GPU time and memory bandwidth that a
-fill-heavy UI wants.
+**So the compute FFT is a wash on a Pi 4 for this workload** - neither the win
+the port plan hoped for nor a regression. Three repeats per configuration, after
+a single unrepeated pair suggested otherwise. Agreement is exact (0.00000) on
+both backends, so the 256-invocation kernels are correct either way.
 
-Fenced per-kernel GPU time, SDL_GPU only:
+Use `VISAGE_VIZ_BACKEND=cpu|gpu` to pick the analysis at startup, since it is
+otherwise only reachable through a panel button.
+
+Fenced per-kernel GPU time, SDL_GPU only, and these *are* GPU-side measurements:
 
 ```
 kernel[0] R2C 512        92.6 us      <- faster on v3d

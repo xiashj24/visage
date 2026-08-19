@@ -43,6 +43,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <SDL3/SDL_timer.h>
 #include <visage/app.h>
 #include <visage_widgets/button.h>
@@ -271,6 +272,16 @@ public:
     // Seed both figures so the comparison is on screen from the first frame.
     visualizer_.measureBackends();
 
+    // Which analysis runs is otherwise only reachable through a panel button, so
+    // the live cost of the other one cannot be sampled on a board with no
+    // display. Only the selected backend's figure is updated per frame.
+    if (const char* want = std::getenv("VISAGE_VIZ_BACKEND")) {
+      if (std::strcmp(want, "cpu") == 0)
+        visualizer_.setBackend(viz::Visualizer::Backend::Cpu);
+      else if (std::strcmp(want, "gpu") == 0)
+        visualizer_.setBackend(viz::Visualizer::Backend::Gpu);
+    }
+
     // Same reason as the status line: these numbers are panel widgets, and the
     // board this runs on is reached over ssh with no display to read them from.
     if (std::getenv("VISAGE_RENDER_INFO")) {
@@ -313,9 +324,21 @@ private:
 
     frame_count_++;
     if (now - last_fps_time_ >= 0.5) {
-      panel_->setFramesPerSecond(static_cast<float>(frame_count_ / (now - last_fps_time_)));
+      float fps = static_cast<float>(frame_count_ / (now - last_fps_time_));
+      panel_->setFramesPerSecond(fps);
       last_fps_time_ = now;
       frame_count_ = 0;
+
+      // The live rolling average, which is not what measureBackends() reports:
+      // that runs its iterations back to back with nothing drawn between them,
+      // so it never pays the pipeline stall this one does.
+      if (std::getenv("VISAGE_RENDER_INFO") && ++report_count_ % 4 == 0) {
+        bool gpu = visualizer_.backend() == viz::Visualizer::Backend::Gpu;
+        std::fprintf(stderr, "Visualizer: live %s analysis %.1fus  fps=%.1f\n",
+                     gpu ? "gpu" : "cpu",
+                     gpu ? visualizer_.gpuMicros() : visualizer_.cpuMicros(),
+                     static_cast<double>(fps));
+      }
     }
     // The readouts change every frame, so the panel repaints on the next one.
     panel_->redraw();
@@ -329,6 +352,7 @@ private:
   double last_time_ = 0.0;
   double last_fps_time_ = 0.0;
   int frame_count_ = 0;
+  int report_count_ = 0;
 };
 
 int runExample() {

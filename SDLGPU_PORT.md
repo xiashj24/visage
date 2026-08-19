@@ -480,21 +480,42 @@ Everything else on the ledger also favours gl: runtime GLSL (`LiveShaderEditing`
 builds), no `MESA: error: destroy dumb object` at teardown, and presentation
 through GBM that does not care about the panel's exact mode.
 
-### The compute FFT is a CPU regression here
+### The compute FFT is a wash on a Pi 4, and its own timers mislead
 
-| | CPU FFT | GPU FFT, main thread |
-|---|---|---|
-| gl / v3d | 153.5 µs | **183.2 µs** |
-| SDL_GPU / V3D | 218.9 µs | **348.6 µs** |
+The visualizer's microsecond readouts cannot be read as CPU cost. They come from
+a wall clock, so they include time blocked on the GPU, and `measureBackends()`
+measures something different again - 200 iterations back to back with nothing
+drawn between them, so the queued GPU work drains after the timer stops. Only the
+selected backend's figure is updated per frame, so the other is frozen at
+whatever the last batch measured, which makes the two look comparable when they
+are not.
 
-`gpuMicros()` excludes the dispatch's own execution, so it is precisely the
-"work moved off the CPU" figure, and on a Pi 4 it moves the wrong way on both
-backends. Dispatch overhead does not scale down from the dev machine's 14.2 µs
-while the CPU side scales as expected. **Run the analysis on the CPU on this
-hardware.** Agreement is exact (0.00000) on both backends, so the kernels are
-correct - just not worth dispatching.
+Measured as process CPU time instead, three repeats per configuration:
 
-The per-kernel question this plan left open is answered, and inverted:
+| backend | analysis | live wall-clock | process CPU | fps |
+|---|---|---|---|---|
+| gl | GPU compute | ~200 µs | 23.4 / 24.0 / 23.5 % | 60.3 |
+| gl | CPU | ~7100 µs | 24.0 / 24.0 / 23.8 % | 60.3 |
+| SDL_GPU | GPU compute | ~150-220 µs | 32.3 / 32.3 / 31.9 % | 60.2 |
+| SDL_GPU | CPU | ~290 µs | 23.0 / 31.8 / 31.8 % | 60.2 |
+
+**The analysis choice makes no measurable difference to CPU on either backend**,
+and the frame rate is 60 either way. The alarming 7 ms on gl is a stall rather
+than work: `uploadRows()` calls `glTexSubImage2D` on the texture the full-screen
+spectrum shader is sampling, so the driver blocks until the GPU releases it.
+SDL_GPU's upload goes through a staging copy and does not block, which is why the
+same code path costs ~290 µs there.
+
+Note the first CPU-analysis run in each series reads low (18.2 % and 23.0 %) and
+the repeats do not. A single unrepeated pair of those outliers is what first
+suggested a difference; there is none.
+
+The kernels themselves are correct - agreement is exact on both backends - so the
+256-invocation rewrite is sound. `VISAGE_VIZ_BACKEND=cpu|gpu` selects the
+analysis at startup, which is otherwise only reachable through a panel button.
+
+The per-kernel question this plan left open is answered, and inverted. These are
+fenced GPU-side measurements and stand:
 
 ```
 kernel[0] R2C 512        92.6 us      <- faster on v3d
