@@ -72,9 +72,11 @@ foreach (EXAMPLE ${EXAMPLES})
     )
 
     # AudioVisualizer drives its own GL and audio, so it needs SDL3 headers
-    # directly rather than through visage.
+    # directly rather than through visage. Headers only: the static library
+    # already arrives through visage, and naming it again puts it on the link
+    # line twice.
     if (EXAMPLE STREQUAL "AudioVisualizer")
-      target_link_libraries(Example${EXAMPLE} PRIVATE SDL3::SDL3-static)
+      target_link_libraries(Example${EXAMPLE} PRIVATE SDL3::Headers)
     endif ()
   endif ()
 endforeach ()
