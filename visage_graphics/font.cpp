@@ -26,9 +26,12 @@
 #include "visage_utils/thread_utils.h"
 
 #include <bgfx/bgfx.h>
+#include <cstdint>
 #include <cstring>
 #include <freetype/freetype.h>
 #include <freetype/ftbitmap.h>
+#include <freetype/ftsizes.h>
+#include <memory>
 #include <set>
 #include <vector>
 
@@ -83,8 +86,7 @@ namespace visage {
     TypeFace(const TypeFace&) = delete;
     TypeFace& operator=(const TypeFace&) = delete;
 
-    TypeFace(int size, const unsigned char* data, int data_size, FT_Int32 load_target) :
-        load_target_(load_target) {
+    TypeFace(int size, const unsigned char* data, int data_size) {
       face_ = FreeTypeLibrary::newMemoryFace(data, data_size);
       FT_Set_Pixel_Sizes(face_, 0, std::max(0, size));
     }
@@ -96,24 +98,12 @@ namespace visage {
     std::string styleName() const { return face_->style_name; }
 
     int glyphIndex(char32_t character) const { return FT_Get_Char_Index(face_, character); }
-    bool hasCharacter(char32_t character) const { return glyphIndex(character); }
     int lineHeight() const { return face_->size->metrics.height >> 6; }
-
-    FT_GlyphSlot characterInfo(char32_t character) const {
-      FT_Load_Char(face_, character, load_target_);
-      return face_->glyph;
-    }
-
-    FT_GlyphSlot characterRasterData(char32_t character) const {
-      FT_Load_Char(face_, character, FT_LOAD_RENDER | load_target_);
-      return face_->glyph;
-    }
 
     FT_Face face() const { return face_; }
 
   private:
     FT_Face face_ = nullptr;
-    FT_Int32 load_target_ = FT_LOAD_TARGET_NORMAL;
   };
 
   // The first byte of a bitmap's row y, counted from the top whichever way
@@ -162,23 +152,96 @@ namespace visage {
     FT_Bitmap_Done(FreeTypeLibrary::library(), &converted);
   }
 
+  // The faces tried in order for a character a font lacks, before the emoji
+  // face. Opened from their files on first need, so a chain costs nothing
+  // until a character is missing, and read by FreeType on demand rather than
+  // held in memory. Fonts share one chain; each renders from it at its own
+  // size through an FT_Size of its own.
+  class FallbackChain {
+  public:
+    explicit FallbackChain(std::vector<FallbackFace> files) :
+        files_(std::move(files)), faces_(files_.size(), nullptr), opened_(files_.size(), false) { }
+
+    ~FallbackChain() {
+      for (FT_Face face : faces_) {
+        if (face)
+          FT_Done_Face(face);
+      }
+    }
+
+    // The first face that has the character, or -1.
+    int faceFor(char32_t character) {
+      auto found = coverage_.find(character);
+      if (found != coverage_.end())
+        return found->second;
+
+      int covering = -1;
+      for (int i = 0; i < static_cast<int>(files_.size()) && covering < 0; ++i) {
+        FT_Face chain_face = face(i);
+        if (chain_face && FT_Get_Char_Index(chain_face, character))
+          covering = i;
+      }
+      coverage_[character] = covering;
+      return covering;
+    }
+
+    FT_Face face(int index) {
+      if (!opened_[index]) {
+        opened_[index] = true;
+        const FallbackFace& file = files_[index];
+        if (FT_New_Face(FreeTypeLibrary::library(), file.path.c_str(), file.index, &faces_[index]))
+          faces_[index] = nullptr;
+      }
+      return faces_[index];
+    }
+
+  private:
+    std::vector<FallbackFace> files_;
+    std::vector<FT_Face> faces_;
+    std::vector<bool> opened_;
+    std::map<char32_t, int> coverage_;
+  };
+
+  static std::shared_ptr<FallbackChain>& fallbackChain() {
+    FreeTypeLibrary::instance();
+    static std::shared_ptr<FallbackChain> chain;
+    return chain;
+  }
+
+  // Each setting of the chain, so fonts made after it keep their own atlases.
+  static int& fallbackGeneration() {
+    static int generation = 0;
+    return generation;
+  }
+
   class PackedFont {
   public:
     static constexpr int kChannels = 4;
 
-    PackedFont(const std::string& id, int size, const unsigned char* data, int data_size,
-               FT_Int32 load_target) : id_(id), size_(size), data_size_(data_size) {
-      data_ = std::make_unique<unsigned char[]>(data_size);
-      std::memcpy(data_.get(), data, data_size);
-      type_face_ = std::make_unique<TypeFace>(size, data_.get(), data_size, load_target);
-      std::unique_ptr<PackedGlyph[]> glyphs = std::make_unique<PackedGlyph[]>(type_face_->numGlyphs());
+    // A glyph is its face and its index there: 0 the font's own face, 1 and
+    // on the chain's, and the emoji face with the codepoint as its index.
+    using GlyphKey = uint64_t;
+    static constexpr uint32_t kEmojiFace = 0xffffffff;
+    static GlyphKey glyphKey(uint32_t face, uint32_t index) {
+      return (static_cast<GlyphKey>(face) << 32) | index;
+    }
+    static uint32_t keyFace(GlyphKey key) { return key >> 32; }
+    static uint32_t keyIndex(GlyphKey key) { return key & 0xffffffff; }
 
-      packed_glyphs_['\n'] = Font::kNullPackedGlyph;
+    // data is the font cache's copy of the file, shared by every size.
+    PackedFont(const std::string& id, int size, const unsigned char* data, int data_size,
+               FT_Int32 load_target, std::shared_ptr<FallbackChain> chain) :
+        id_(id), size_(size), data_(data), data_size_(data_size), load_target_(load_target),
+        chain_(std::move(chain)) {
+      type_face_ = std::make_unique<TypeFace>(size, data_, data_size);
+      characters_['\n'] = &null_glyph_;
     }
 
     ~PackedFont() {
       if (bgfx::isValid(texture_handle_))
         bgfx::destroy(texture_handle_);
+      for (auto& fallback_size : fallback_sizes_)
+        FT_Done_Size(fallback_size.second);
       type_face_ = nullptr;
     }
 
@@ -189,7 +252,7 @@ namespace visage {
       }
 
       atlas_map_.pack();
-      for (auto& glyph : packed_glyphs_) {
+      for (auto& glyph : glyphs_) {
         if (glyph.second.width == 0)
           continue;
 
@@ -199,19 +262,19 @@ namespace visage {
       }
     }
 
-    void rasterizeGlyph(char32_t character, const PackedGlyph* packed_glyph) {
+    void rasterizeGlyph(GlyphKey key, const PackedGlyph* packed_glyph) {
       int size = packed_glyph->width * packed_glyph->height;
       if (size == 0)
         return;
 
       std::unique_ptr<unsigned int[]> texture = std::make_unique<unsigned int[]>(size);
-      if (packed_glyph->type_face) {
-        FT_GlyphSlot glyph = packed_glyph->type_face->characterRasterData(character);
-        copyGlyphBitmap(glyph->bitmap, packed_glyph->width, packed_glyph->height, texture.get());
-      }
-      else {
-        EmojiRasterizer::instance().drawIntoBuffer(character, size_, packed_glyph->width,
+      if (keyFace(key) == kEmojiFace) {
+        EmojiRasterizer::instance().drawIntoBuffer(keyIndex(key), size_, packed_glyph->width,
                                                    texture.get(), packed_glyph->width, 0, 0);
+      }
+      else if (FT_Face face = activeFace(keyFace(key))) {
+        if (FT_Load_Glyph(face, keyIndex(key), FT_LOAD_RENDER | load_target_) == 0)
+          copyGlyphBitmap(face->glyph->bitmap, packed_glyph->width, packed_glyph->height, texture.get());
       }
 
       bgfx::updateTexture2D(texture_handle_, 0, 0, packed_glyph->atlas_left,
@@ -219,22 +282,39 @@ namespace visage {
                             bgfx::copy(texture.get(), size * kChannels));
     }
 
-    PackedGlyph* packCharacterGlyph(PackedGlyph* packed_glyph, const TypeFace* type_face, char32_t character) {
+    PackedGlyph* packFaceGlyph(uint32_t face_number, uint32_t glyph_index) {
       static constexpr float kAdvanceMult = 1.0f / (1 << 6);
 
-      FT_GlyphSlot glyph = type_face->characterInfo(character);
+      GlyphKey key = glyphKey(face_number, glyph_index);
+      auto found = glyphs_.find(key);
+      if (found != glyphs_.end())
+        return &found->second;
+
+      PackedGlyph* packed_glyph = &glyphs_[key];
+      FT_Face face = activeFace(face_number);
+      if (face == nullptr || FT_Load_Glyph(face, glyph_index, load_target_)) {
+        *packed_glyph = Font::kNullPackedGlyph;
+        return packed_glyph;
+      }
+
+      FT_GlyphSlot glyph = face->glyph;
       packed_glyph->width = glyph->bitmap.width;
       packed_glyph->height = glyph->bitmap.rows;
       packed_glyph->x_offset = glyph->bitmap_left;
       packed_glyph->y_offset = glyph->bitmap_top;
       packed_glyph->x_advance = glyph->advance.x * kAdvanceMult;
-      packed_glyph->type_face = type_face;
 
-      packGlyph(packed_glyph, character);
+      packGlyph(packed_glyph, key);
       return packed_glyph;
     }
 
-    PackedGlyph* packEmojiGlyph(PackedGlyph* packed_glyph, char32_t emoji) {
+    PackedGlyph* packEmojiGlyph(char32_t emoji) {
+      GlyphKey key = glyphKey(kEmojiFace, emoji);
+      auto found = glyphs_.find(key);
+      if (found != glyphs_.end())
+        return &found->second;
+
+      PackedGlyph* packed_glyph = &glyphs_[key];
       int raster_width = lineHeight();
       packed_glyph->width = raster_width;
       packed_glyph->height = raster_width;
@@ -242,19 +322,25 @@ namespace visage {
       packed_glyph->y_offset = size_;
       packed_glyph->x_advance = raster_width;
 
-      packGlyph(packed_glyph, emoji);
+      packGlyph(packed_glyph, key);
       return packed_glyph;
     }
 
     const PackedGlyph* packedGlyph(char32_t character) {
-      PackedGlyph* packed_glyph = &packed_glyphs_[character];
-      if (packed_glyph->atlas_left >= 0)
-        return packed_glyph;
+      auto found = characters_.find(character);
+      if (found != characters_.end())
+        return found->second;
 
-      if (type_face_->hasCharacter(character))
-        return packCharacterGlyph(packed_glyph, type_face_.get(), character);
+      PackedGlyph* packed_glyph = nullptr;
+      if (int index = type_face_->glyphIndex(character))
+        packed_glyph = packFaceGlyph(0, index);
+      else if (int chain_face = chain_ ? chain_->faceFor(character) : -1; chain_face >= 0)
+        packed_glyph = packFaceGlyph(chain_face + 1, FT_Get_Char_Index(chain_->face(chain_face), character));
+      else
+        packed_glyph = packEmojiGlyph(character);
 
-      return packEmojiGlyph(packed_glyph, character);
+      characters_[character] = packed_glyph;
+      return packed_glyph;
     }
 
     void checkInit() {
@@ -267,7 +353,7 @@ namespace visage {
         bgfx::updateTexture2D(texture_handle_, 0, 0, 0, 0, width, height,
                               bgfx::copy(clear.get(), width * height * kChannels));
 
-        for (auto& glyph : packed_glyphs_)
+        for (auto& glyph : glyphs_)
           rasterizeGlyph(glyph.first, &glyph.second);
       }
     }
@@ -277,31 +363,62 @@ namespace visage {
     bgfx::TextureHandle& textureHandle() { return texture_handle_; }
     int lineHeight() const { return type_face_->lineHeight(); }
     int size() const { return size_; }
-    const unsigned char* data() const { return data_.get(); }
+    const unsigned char* data() const { return data_; }
     int dataSize() const { return data_size_; }
     const std::string& id() const { return id_; }
 
   private:
-    void packGlyph(PackedGlyph* packed_glyph, char32_t character) {
-      if (!atlas_map_.addRect(character, packed_glyph->width, packed_glyph->height))
+    // A face ready to load glyphs at this font's size: its own, or a chain
+    // face with this font's size made active on it.
+    FT_Face activeFace(uint32_t face_number) {
+      if (face_number == 0)
+        return type_face_->face();
+
+      int chain_index = face_number - 1;
+      FT_Face face = chain_ ? chain_->face(chain_index) : nullptr;
+      if (face == nullptr)
+        return nullptr;
+
+      auto found = fallback_sizes_.find(chain_index);
+      if (found != fallback_sizes_.end()) {
+        FT_Activate_Size(found->second);
+        return face;
+      }
+
+      FT_Size size = nullptr;
+      if (FT_New_Size(face, &size))
+        return nullptr;
+      FT_Activate_Size(size);
+      FT_Set_Pixel_Sizes(face, 0, std::max(0, size_));
+      fallback_sizes_[chain_index] = size;
+      return face;
+    }
+
+    void packGlyph(PackedGlyph* packed_glyph, GlyphKey key) {
+      if (!atlas_map_.addRect(key, packed_glyph->width, packed_glyph->height))
         resize();
 
-      const PackedRect& rect = atlas_map_.rectForId(character);
+      const PackedRect& rect = atlas_map_.rectForId(key);
       packed_glyph->atlas_left = rect.x;
       packed_glyph->atlas_top = rect.y;
 
       if (bgfx::isValid(texture_handle_))
-        rasterizeGlyph(character, packed_glyph);
+        rasterizeGlyph(key, packed_glyph);
     }
 
-    PackedAtlasMap<char32_t> atlas_map_;
+    PackedAtlasMap<GlyphKey> atlas_map_;
     std::unique_ptr<TypeFace> type_face_;
     std::string id_;
     int size_ = 0;
-    std::unique_ptr<unsigned char[]> data_;
+    const unsigned char* data_ = nullptr;
     int data_size_ = 0;
+    FT_Int32 load_target_ = FT_LOAD_TARGET_NORMAL;
+    std::shared_ptr<FallbackChain> chain_;
+    std::map<int, FT_Size> fallback_sizes_;
 
-    std::map<char32_t, PackedGlyph> packed_glyphs_;
+    std::map<GlyphKey, PackedGlyph> glyphs_;
+    std::map<char32_t, PackedGlyph*> characters_;
+    PackedGlyph null_glyph_ = Font::kNullPackedGlyph;
     bgfx::TextureHandle texture_handle_ = { bgfx::kInvalidHandle };
   };
 
@@ -316,6 +433,23 @@ namespace visage {
 
   const TextRendering& Font::rendering() {
     return textRendering();
+  }
+
+  void Font::setFallbackFaces(std::vector<FallbackFace> faces) {
+    fallbackChain() = faces.empty() ? nullptr : std::make_shared<FallbackChain>(std::move(faces));
+    ++fallbackGeneration();
+  }
+
+  // The cache's id for a face at a size under the current rendering: a
+  // hinting and a fallback chain each rasterize or cover differently, so
+  // each keeps its own atlas; visage's defaults keep the plain id.
+  static std::string cacheId(const std::string& face_id) {
+    std::string id = face_id;
+    if (Font::rendering().hinting == TextRendering::Hinting::Light)
+      id += " - light";
+    if (fallbackChain())
+      id += " - fallback " + std::to_string(fallbackGeneration());
+    return id;
   }
 
   bool Font::hasNewLine(const char32_t* string, int length) {
@@ -549,6 +683,9 @@ namespace visage {
 
   PackedFont* FontCache::loadPackedFont(int size, const std::string& file_path) {
     std::string id = "file: " + file_path + " - " + std::to_string(size);
+    if (instance()->cache_.count(cacheId(id)))
+      return instance()->incrementPackedFont(cacheId(id));
+
     File file(file_path);
     size_t file_size = 0;
     std::unique_ptr<unsigned char[]> data = loadFileData(file, file_size);
@@ -577,9 +714,8 @@ namespace visage {
                                                 const unsigned char* font_data, int data_size) {
     VISAGE_ASSERT(Thread::isMainThread());
 
-    // Each hinting rasterizes and advances differently, so it keeps its own atlas.
     bool light = Font::rendering().hinting == TextRendering::Hinting::Light;
-    std::string id = light ? face_id + " - light" : face_id;
+    std::string id = cacheId(face_id);
     if (cache_.count(id) == 0) {
       TypeFaceData type_face_data(font_data, data_size);
       if (type_face_data_lookup_.count(type_face_data) == 0) {
@@ -591,8 +727,9 @@ namespace visage {
 
       type_face_data.data = type_face_data_lookup_[type_face_data].get();
       type_face_data_ref_count_[type_face_data]++;
-      cache_[id] = std::make_unique<PackedFont>(id, size, font_data, data_size,
-                                                light ? FT_LOAD_TARGET_LIGHT : FT_LOAD_TARGET_NORMAL);
+      cache_[id] = std::make_unique<PackedFont>(id, size, type_face_data.data, data_size,
+                                                light ? FT_LOAD_TARGET_LIGHT : FT_LOAD_TARGET_NORMAL,
+                                                fallbackChain());
     }
 
     return incrementPackedFont(id);
@@ -611,15 +748,16 @@ namespace visage {
       if (it->second)
         ++it;
       else {
+        // The font goes before the file data its face reads from.
         TypeFaceData type_face_data(it->first->data(), it->first->dataSize());
+        cache_.erase(it->first->id());
+        it = ref_count_.erase(it);
+
         type_face_data_ref_count_[type_face_data]--;
         if (type_face_data_ref_count_[type_face_data] == 0) {
           type_face_data_ref_count_.erase(type_face_data);
           type_face_data_lookup_.erase(type_face_data);
         }
-
-        cache_.erase(it->first->id());
-        it = ref_count_.erase(it);
       }
     }
     has_stale_fonts_ = false;

@@ -26,6 +26,7 @@
 #include "visage_file_embed/embedded_file.h"
 
 #include <map>
+#include <string>
 #include <vector>
 
 namespace visage {
@@ -60,6 +61,13 @@ namespace visage {
     bool polarity_correction = false;
     float dark_exponent = 1.0f;
     float light_exponent = 1.0f;
+  };
+
+  // A face tried for a character a font lacks: a font file, and the face's
+  // index within it for a collection.
+  struct FallbackFace {
+    std::string path;
+    int index = 0;
   };
 
   struct FontAtlasQuad {
@@ -100,6 +108,9 @@ namespace visage {
 
     static void setRendering(const TextRendering& rendering);
     static const TextRendering& rendering();
+    // Faces tried in order for a character a font lacks, before the emoji
+    // face; none by default. Taken by fonts made after it is set.
+    static void setFallbackFaces(std::vector<FallbackFace> faces);
 
     Font() = default;
     Font(float size, const unsigned char* font_data, int data_size, float dpi_scale = 0.0f);
