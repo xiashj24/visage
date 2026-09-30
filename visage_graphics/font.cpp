@@ -26,7 +26,9 @@
 #include "visage_utils/thread_utils.h"
 
 #include <bgfx/bgfx.h>
+#include <cstring>
 #include <freetype/freetype.h>
+#include <freetype/ftbitmap.h>
 #include <set>
 #include <vector>
 
@@ -54,6 +56,8 @@ namespace visage {
       FT_Done_Face(face);
       instance().faces_.erase(face);
     }
+
+    static FT_Library library() { return instance().library_; }
 
     static std::string idForFont(const unsigned char* data, int data_size) {
       FT_Face face = newMemoryFace(data, data_size);
@@ -110,6 +114,52 @@ namespace visage {
     FT_Face face_ = nullptr;
   };
 
+  // The first byte of a bitmap's row y, counted from the top whichever way
+  // its rows flow.
+  static const unsigned char* bitmapRow(const FT_Bitmap& bitmap, int y) {
+    const unsigned char* top = bitmap.buffer;
+    if (bitmap.pitch < 0)
+      top -= bitmap.pitch * (static_cast<int>(bitmap.rows) - 1);
+    return top + y * bitmap.pitch;
+  }
+
+  // A rendered glyph into the atlas's pixels, white with the coverage as
+  // alpha, whatever depth FreeType handed back: an embedded strike can be
+  // 1, 2 or 4 bits deep, and a colour glyph is premultiplied BGRA.
+  static void copyGlyphBitmap(const FT_Bitmap& bitmap, int width, int height, unsigned int* dest) {
+    if (bitmap.pixel_mode == FT_PIXEL_MODE_BGRA) {
+      int rows = std::min(height, static_cast<int>(bitmap.rows));
+      int columns = std::min(width, static_cast<int>(bitmap.width));
+      for (int y = 0; y < rows; ++y)
+        std::memcpy(dest + y * width, bitmapRow(bitmap, y), columns * sizeof(unsigned int));
+      return;
+    }
+
+    FT_Bitmap converted;
+    FT_Bitmap_Init(&converted);
+    const FT_Bitmap* gray = &bitmap;
+    if (bitmap.pixel_mode != FT_PIXEL_MODE_GRAY) {
+      if (FT_Bitmap_Convert(FreeTypeLibrary::library(), &bitmap, &converted, 1) == 0)
+        gray = &converted;
+      else
+        gray = nullptr;
+    }
+
+    if (gray) {
+      int rows = std::min(height, static_cast<int>(gray->rows));
+      int columns = std::min(width, static_cast<int>(gray->width));
+      int max_level = std::max(1, gray->num_grays - 1);
+      for (int y = 0; y < rows; ++y) {
+        const unsigned char* row = bitmapRow(*gray, y);
+        for (int x = 0; x < columns; ++x) {
+          unsigned int coverage = max_level == 255 ? row[x] : row[x] * 255 / max_level;
+          dest[y * width + x] = (coverage << 24) + 0xffffff;
+        }
+      }
+    }
+    FT_Bitmap_Done(FreeTypeLibrary::library(), &converted);
+  }
+
   class PackedFont {
   public:
     static constexpr int kChannels = 4;
@@ -155,12 +205,7 @@ namespace visage {
       std::unique_ptr<unsigned int[]> texture = std::make_unique<unsigned int[]>(size);
       if (packed_glyph->type_face) {
         FT_GlyphSlot glyph = packed_glyph->type_face->characterRasterData(character);
-        for (int y = 0; y < packed_glyph->height; ++y) {
-          for (int x = 0; x < packed_glyph->width; ++x) {
-            int i = y * packed_glyph->width + x;
-            texture[i] = (glyph->bitmap.buffer[y * glyph->bitmap.pitch + x] << 24) + 0xffffff;
-          }
-        }
+        copyGlyphBitmap(glyph->bitmap, packed_glyph->width, packed_glyph->height, texture.get());
       }
       else {
         EmojiRasterizer::instance().drawIntoBuffer(character, size_, packed_glyph->width,

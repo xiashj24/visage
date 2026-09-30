@@ -22,6 +22,7 @@
 #include "embedded/fonts.h"
 #include "emoji.h"
 
+#include <cstring>
 #include <freetype/freetype.h>
 
 namespace visage {
@@ -50,15 +51,28 @@ namespace visage {
       if (FT_Render_Glyph(face_->glyph, FT_RENDER_MODE_NORMAL))
         return;
 
-      int height = face_->glyph->bitmap.rows;
-      int width = face_->glyph->bitmap.width;
-      unsigned int* source = (unsigned int*)face_->glyph->bitmap.buffer;
+      // A colour glyph is premultiplied BGRA; a codepoint the face lacks gets
+      // its .notdef, rendered grey, which goes in as text does.
+      const FT_Bitmap& bitmap = face_->glyph->bitmap;
+      bool color = bitmap.pixel_mode == FT_PIXEL_MODE_BGRA;
+      if (!color && bitmap.pixel_mode != FT_PIXEL_MODE_GRAY)
+        return;
+
+      int height = bitmap.rows;
+      int width = bitmap.width;
+      const unsigned char* top = bitmap.buffer;
+      if (bitmap.pitch < 0)
+        top -= bitmap.pitch * (height - 1);
       int offset_x = std::max(0, write_width - width) / 2;
       int offset_y = std::max(0, write_width - height) / 2;
       for (int y = 0; y < height && y < write_width; ++y) {
+        const unsigned char* row = top + y * bitmap.pitch;
         for (int x = 0; x < width && x < write_width; ++x) {
           int i = (dest_y + y + offset_y) * dest_width + dest_x + x + offset_x;
-          dest[i] = source[y * width + x];
+          if (color)
+            std::memcpy(dest + i, row + x * sizeof(unsigned int), sizeof(unsigned int));
+          else
+            dest[i] = (static_cast<unsigned int>(row[x]) << 24) + 0xffffff;
         }
       }
     }
