@@ -83,7 +83,8 @@ namespace visage {
     TypeFace(const TypeFace&) = delete;
     TypeFace& operator=(const TypeFace&) = delete;
 
-    TypeFace(int size, const unsigned char* data, int data_size) {
+    TypeFace(int size, const unsigned char* data, int data_size, FT_Int32 load_target) :
+        load_target_(load_target) {
       face_ = FreeTypeLibrary::newMemoryFace(data, data_size);
       FT_Set_Pixel_Sizes(face_, 0, std::max(0, size));
     }
@@ -99,12 +100,12 @@ namespace visage {
     int lineHeight() const { return face_->size->metrics.height >> 6; }
 
     FT_GlyphSlot characterInfo(char32_t character) const {
-      FT_Load_Char(face_, character, 0);
+      FT_Load_Char(face_, character, load_target_);
       return face_->glyph;
     }
 
     FT_GlyphSlot characterRasterData(char32_t character) const {
-      FT_Load_Char(face_, character, FT_LOAD_RENDER);
+      FT_Load_Char(face_, character, FT_LOAD_RENDER | load_target_);
       return face_->glyph;
     }
 
@@ -112,6 +113,7 @@ namespace visage {
 
   private:
     FT_Face face_ = nullptr;
+    FT_Int32 load_target_ = FT_LOAD_TARGET_NORMAL;
   };
 
   // The first byte of a bitmap's row y, counted from the top whichever way
@@ -164,11 +166,11 @@ namespace visage {
   public:
     static constexpr int kChannels = 4;
 
-    PackedFont(const std::string& id, int size, const unsigned char* data, int data_size) :
-        id_(id), size_(size), data_size_(data_size) {
+    PackedFont(const std::string& id, int size, const unsigned char* data, int data_size,
+               FT_Int32 load_target) : id_(id), size_(size), data_size_(data_size) {
       data_ = std::make_unique<unsigned char[]>(data_size);
       std::memcpy(data_.get(), data, data_size);
-      type_face_ = std::make_unique<TypeFace>(size, data_.get(), data_size);
+      type_face_ = std::make_unique<TypeFace>(size, data_.get(), data_size, load_target);
       std::unique_ptr<PackedGlyph[]> glyphs = std::make_unique<PackedGlyph[]>(type_face_->numGlyphs());
 
       packed_glyphs_['\n'] = Font::kNullPackedGlyph;
@@ -302,6 +304,19 @@ namespace visage {
     std::map<char32_t, PackedGlyph> packed_glyphs_;
     bgfx::TextureHandle texture_handle_ = { bgfx::kInvalidHandle };
   };
+
+  static TextRendering& textRendering() {
+    static TextRendering rendering;
+    return rendering;
+  }
+
+  void Font::setRendering(const TextRendering& rendering) {
+    textRendering() = rendering;
+  }
+
+  const TextRendering& Font::rendering() {
+    return textRendering();
+  }
 
   bool Font::hasNewLine(const char32_t* string, int length) {
     for (int i = 0; i < length; ++i) {
@@ -558,10 +573,13 @@ namespace visage {
     return cache_[id].get();
   }
 
-  PackedFont* FontCache::createOrLoadPackedFont(const std::string& id, int size,
+  PackedFont* FontCache::createOrLoadPackedFont(const std::string& face_id, int size,
                                                 const unsigned char* font_data, int data_size) {
     VISAGE_ASSERT(Thread::isMainThread());
 
+    // Each hinting rasterizes and advances differently, so it keeps its own atlas.
+    bool light = Font::rendering().hinting == TextRendering::Hinting::Light;
+    std::string id = light ? face_id + " - light" : face_id;
     if (cache_.count(id) == 0) {
       TypeFaceData type_face_data(font_data, data_size);
       if (type_face_data_lookup_.count(type_face_data) == 0) {
@@ -573,7 +591,8 @@ namespace visage {
 
       type_face_data.data = type_face_data_lookup_[type_face_data].get();
       type_face_data_ref_count_[type_face_data]++;
-      cache_[id] = std::make_unique<PackedFont>(id, size, font_data, data_size);
+      cache_[id] = std::make_unique<PackedFont>(id, size, font_data, data_size,
+                                                light ? FT_LOAD_TARGET_LIGHT : FT_LOAD_TARGET_NORMAL);
     }
 
     return incrementPackedFont(id);

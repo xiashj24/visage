@@ -47,5 +47,6 @@ namespace visage {
     static constexpr char kGradientPosition[] = "u_gradient_position";
     static constexpr char kGradientPosition2[] = "u_gradient_position2";
     static constexpr char kRadialGradient[] = "u_radial_gradient";
+    static constexpr char kTextGamma[] = "u_text_gamma";
   };
 }

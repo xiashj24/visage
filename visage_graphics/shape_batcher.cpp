@@ -33,6 +33,7 @@
 #include "visage_utils/space.h"
 
 #include <bgfx/bgfx.h>
+#include <cmath>
 
 namespace visage {
   static constexpr uint64_t blendModeValue(BlendMode blend_mode) {
@@ -220,6 +221,7 @@ namespace visage {
       return;
 
     const Font& font = batches[0].shapes->front().font;
+    const TextRendering& rendering = Font::rendering();
     int total_length = 0;
     for (const auto& batch : batches) {
       auto count_pieces = [&batch](int sum, const TextBlock& text_block) {
@@ -306,9 +308,15 @@ namespace visage {
             if (!overlaps(text_block.quads[i]))
               continue;
 
-            float left = x + text_block.quads[i].x - 0.5f;
+            float origin_x = x + text_block.quads[i].x;
+            float origin_y = y + text_block.quads[i].y;
+            if (rendering.whole_pixel_origins) {
+              origin_x = std::round(origin_x);
+              origin_y = std::round(origin_y);
+            }
+            float left = origin_x - 0.5f;
             float right = left + text_block.quads[i].width + 1.0f;
-            float top = y + text_block.quads[i].y;
+            float top = origin_y;
             float bottom = top + text_block.quads[i].height;
 
             float texture_x = text_block.quads[i].packed_glyph->atlas_left - 0.5f;
@@ -358,8 +366,14 @@ namespace visage {
     setUniformDimensions(layer.width(), layer.height());
     setColorMult(layer.hdr());
     setUniform<Uniforms::kRadialGradient>(batches[0].shapes->front().radialGradient() ? 1.0f : 0.0f);
+    // The correction is text's alone: images and post effects share the
+    // program, and uniform values outlive the draw that set them.
+    if (rendering.polarity_correction)
+      setUniform<Uniforms::kTextGamma>(rendering.dark_exponent, rendering.light_exponent, 1.0f);
     bgfx::submit(submit_pass,
                  ProgramCache::programHandle(shaders::vs_tinted_texture, shaders::fs_tinted_texture));
+    if (rendering.polarity_correction)
+      setUniform<Uniforms::kTextGamma>(1.0f, 1.0f, 0.0f);
   }
 
   void submitShader(const BatchVector<ShaderWrapper>& batches, const Layer& layer, int submit_pass) {

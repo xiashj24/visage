@@ -43,6 +43,25 @@ namespace visage {
     const TypeFace* type_face = nullptr;
   };
 
+  // How every font places and draws its glyphs. A product fixes it once; it
+  // changes at run time only to compare. The defaults are visage's own.
+  struct TextRendering {
+    enum class Hinting { Default, Light };
+
+    // Each glyph's final origin rounded to a whole pixel, where its quad
+    // samples the atlas texel for texel.
+    bool whole_pixel_origins = false;
+    // FT_LOAD_TARGET_LIGHT hints vertically only. Taken by fonts made after
+    // it is set, each hinting keeping its own atlas.
+    Hinting hinting = Hinting::Default;
+    // Coverage raised to an exponent by the text colour's luminance, from
+    // dark_exponent for black text to light_exponent for white, so a row
+    // keeps its weight when inverted.
+    bool polarity_correction = false;
+    float dark_exponent = 1.0f;
+    float light_exponent = 1.0f;
+  };
+
   struct FontAtlasQuad {
     const PackedGlyph* packed_glyph;
     float x;
@@ -78,6 +97,9 @@ namespace visage {
       return character == '\r' || isVariationSelector(character);
     }
     static bool hasNewLine(const char32_t* string, int length);
+
+    static void setRendering(const TextRendering& rendering);
+    static const TextRendering& rendering();
 
     Font() = default;
     Font(float size, const unsigned char* font_data, int data_size, float dpi_scale = 0.0f);
@@ -191,7 +213,7 @@ namespace visage {
     FontCache();
 
     PackedFont* incrementPackedFont(const std::string& id);
-    PackedFont* createOrLoadPackedFont(const std::string& id, int size,
+    PackedFont* createOrLoadPackedFont(const std::string& face_id, int size,
                                        const unsigned char* font_data, int data_size);
     void decrementPackedFont(PackedFont* packed_font);
     void removeStaleFonts();
