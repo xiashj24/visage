@@ -52,6 +52,16 @@ FetchContent_Declare(freetype GIT_REPOSITORY https://gitlab.freedesktop.org/free
   EXCLUDE_FROM_ALL
 )
 FetchContent_MakeAvailable(freetype)
+# HarfBuzz's own build is not used: its single-file amalgamation is compiled
+# against the freetype above, so the process has one FreeType.
+if (VISAGE_ENABLE_HARFBUZZ)
+  FetchContent_Declare(harfbuzz GIT_REPOSITORY https://github.com/harfbuzz/harfbuzz.git
+    GIT_SHALLOW TRUE
+    GIT_TAG 12.3.2
+    SOURCE_SUBDIR no-cmake-build
+  )
+  FetchContent_MakeAvailable(harfbuzz)
+endif ()
 set(CMAKE_MESSAGE_LOG_LEVEL "NOTICE")
 
 if (MSVC)
@@ -61,6 +71,16 @@ else ()
 endif ()
 
 target_compile_options(freetype PRIVATE ${DISABLE_WARNINGS})
+
+if (VISAGE_ENABLE_HARFBUZZ)
+  add_library(visage_harfbuzz STATIC ${harfbuzz_SOURCE_DIR}/src/harfbuzz.cc)
+  target_compile_definitions(visage_harfbuzz PRIVATE HAVE_FREETYPE=1)
+  target_compile_options(visage_harfbuzz PRIVATE ${DISABLE_WARNINGS})
+  target_include_directories(visage_harfbuzz PUBLIC ${harfbuzz_SOURCE_DIR}/src)
+  target_link_libraries(visage_harfbuzz PRIVATE freetype)
+  target_link_libraries(VisageGraphics PRIVATE visage_harfbuzz)
+  target_compile_definitions(VisageGraphics PRIVATE VISAGE_HARFBUZZ=1)
+endif ()
 
 target_link_libraries(
   VisageGraphics

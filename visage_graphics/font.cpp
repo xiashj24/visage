@@ -33,6 +33,12 @@
 #include <freetype/ftsizes.h>
 #include <memory>
 #include <set>
+#include <string>
+
+#if VISAGE_HARFBUZZ
+#include <hb-ft.h>
+#include <hb.h>
+#endif
 #include <vector>
 
 namespace visage {
@@ -214,9 +220,53 @@ namespace visage {
     return generation;
   }
 
+  static bool& shapingState() {
+    static bool shaping = false;
+    return shaping;
+  }
+
+#if VISAGE_HARFBUZZ
+  // One buffer serves every shaping call, all on the main thread.
+  static hb_buffer_t* shapingBuffer() {
+    static hb_buffer_t* buffer = hb_buffer_create();
+    return buffer;
+  }
+
+  // A joiner or selector that belongs to the run before it, whatever face
+  // covers it: HarfBuzz hides it or uses it there.
+  static bool isDefaultIgnorable(char32_t character) {
+    return character == 0x200c || character == 0x200d || (character >= 0xfe00 && character <= 0xfe0f) ||
+           (character >= 0xe0100 && character <= 0xe01ef);
+  }
+
+  static bool isMark(char32_t character) {
+    switch (hb_unicode_general_category(hb_unicode_funcs_get_default(), character)) {
+    case HB_UNICODE_GENERAL_CATEGORY_NON_SPACING_MARK:
+    case HB_UNICODE_GENERAL_CATEGORY_SPACING_MARK:
+    case HB_UNICODE_GENERAL_CATEGORY_ENCLOSING_MARK: return true;
+    default: return false;
+    }
+  }
+#endif
+
   class PackedFont {
   public:
     static constexpr int kChannels = 4;
+
+    // A string laid out once by shaping: each glyph's origin from the start
+    // of the string's baseline, and the whole string's advance.
+    struct ShapedGlyph {
+      const PackedGlyph* glyph = nullptr;
+      float x = 0.0f;
+      float y = 0.0f;
+    };
+    struct ShapedRun {
+      std::vector<ShapedGlyph> glyphs;
+      float width = 0.0f;
+    };
+    // Strings shaped and kept, so text drawn every frame is shaped once;
+    // the cache empties when full.
+    static constexpr size_t kMaxShapedRuns = 1024;
 
     // A glyph is its face and its index there: 0 the font's own face, 1 and
     // on the chain's, and the emoji face with the codepoint as its index.
@@ -240,6 +290,10 @@ namespace visage {
     ~PackedFont() {
       if (bgfx::isValid(texture_handle_))
         bgfx::destroy(texture_handle_);
+#if VISAGE_HARFBUZZ
+      for (auto& hb_font : hb_fonts_)
+        hb_font_destroy(hb_font.second);
+#endif
       for (auto& fallback_size : fallback_sizes_)
         FT_Done_Size(fallback_size.second);
       type_face_ = nullptr;
@@ -343,6 +397,50 @@ namespace visage {
       return packed_glyph;
     }
 
+#if VISAGE_HARFBUZZ
+    // The string shaped: split into runs by the face that covers each
+    // character, as packedGlyph chooses, a mark or joiner staying in the run
+    // before it where that face has it; each run shaped left to right, the
+    // emoji face's characters drawn one by one.
+    const ShapedRun& shapedRun(const char32_t* text, int length) {
+      std::u32string key(text, length);
+      auto found = runs_.find(key);
+      if (found != runs_.end())
+        return found->second;
+
+      if (runs_.size() >= kMaxShapedRuns)
+        runs_.clear();
+
+      ShapedRun& run = runs_[key];
+      float pen = 0.0f;
+      int start = 0;
+      while (start < length) {
+        char32_t character = text[start];
+        if (Font::isNewLine(character) || Font::isIgnored(character) || isDefaultIgnorable(character)) {
+          ++start;
+          continue;
+        }
+
+        uint32_t face_number = faceNumberFor(character);
+        if (face_number == kEmojiFace) {
+          const PackedGlyph* glyph = packEmojiGlyph(character);
+          run.glyphs.push_back({ glyph, pen + glyph->x_offset, -glyph->y_offset });
+          pen += glyph->x_advance;
+          ++start;
+          continue;
+        }
+
+        int end = start + 1;
+        while (end < length && continuesRun(text[end], face_number))
+          ++end;
+        shapeRun(run, text, length, start, end - start, face_number, pen);
+        start = end;
+      }
+      run.width = pen;
+      return run;
+    }
+#endif
+
     void checkInit() {
       if (!bgfx::isValid(texture_handle_)) {
         texture_handle_ = bgfx::createTexture2D(atlas_map_.width(), atlas_map_.height(), false, 1,
@@ -368,6 +466,80 @@ namespace visage {
     const std::string& id() const { return id_; }
 
   private:
+    // The face packedGlyph draws a character from: 0 the font's own, 1 and on
+    // the chain's, or the emoji face.
+    uint32_t faceNumberFor(char32_t character) {
+      if (type_face_->glyphIndex(character))
+        return 0;
+      int chain_face = chain_ ? chain_->faceFor(character) : -1;
+      return chain_face >= 0 ? chain_face + 1 : kEmojiFace;
+    }
+
+#if VISAGE_HARFBUZZ
+    bool faceHas(uint32_t face_number, char32_t character) {
+      if (face_number == 0)
+        return type_face_->glyphIndex(character);
+      FT_Face face = chain_ ? chain_->face(face_number - 1) : nullptr;
+      return face && FT_Get_Char_Index(face, character);
+    }
+
+    bool continuesRun(char32_t character, uint32_t face_number) {
+      if (Font::isNewLine(character) || character == '\r')
+        return false;
+      if (isDefaultIgnorable(character) || (isMark(character) && faceHas(face_number, character)))
+        return true;
+      return faceNumberFor(character) == face_number;
+    }
+
+    // HarfBuzz's font for a face at this font's size, through hb-ft so its
+    // advances are FreeType's, hinted as the glyphs are.
+    hb_font_t* hbFont(uint32_t face_number) {
+      FT_Face face = activeFace(face_number);
+      if (face == nullptr)
+        return nullptr;
+
+      auto found = hb_fonts_.find(face_number);
+      if (found != hb_fonts_.end())
+        return found->second;
+
+      hb_font_t* font = hb_ft_font_create_referenced(face);
+      hb_ft_font_set_load_flags(font, load_target_);
+      hb_fonts_[face_number] = font;
+      return font;
+    }
+
+    void shapeRun(ShapedRun& run, const char32_t* text, int length, int start, int count,
+                  uint32_t face_number, float& pen) {
+      static constexpr float kPositionMult = 1.0f / (1 << 6);
+
+      hb_font_t* font = hbFont(face_number);
+      if (font == nullptr)
+        return;
+
+      hb_buffer_t* buffer = shapingBuffer();
+      hb_buffer_clear_contents(buffer);
+      hb_buffer_add_utf32(buffer, reinterpret_cast<const uint32_t*>(text), length, start, count);
+      hb_buffer_guess_segment_properties(buffer);
+      // Left to right only: the letters of a right-to-left script stay in
+      // their logical order.
+      hb_buffer_set_direction(buffer, HB_DIRECTION_LTR);
+      hb_shape(font, buffer, nullptr, 0);
+
+      unsigned int glyph_count = 0;
+      const hb_glyph_info_t* infos = hb_buffer_get_glyph_infos(buffer, &glyph_count);
+      const hb_glyph_position_t* positions = hb_buffer_get_glyph_positions(buffer, &glyph_count);
+      for (unsigned int i = 0; i < glyph_count; ++i) {
+        // A character no face covers comes through as glyph 0: the emoji
+        // face has the last word, as unshaped.
+        const PackedGlyph* glyph = infos[i].codepoint ? packFaceGlyph(face_number, infos[i].codepoint)
+                                                      : packEmojiGlyph(text[infos[i].cluster]);
+        run.glyphs.push_back({ glyph, pen + positions[i].x_offset * kPositionMult + glyph->x_offset,
+                               -positions[i].y_offset * kPositionMult - glyph->y_offset });
+        pen += positions[i].x_advance * kPositionMult;
+      }
+    }
+#endif
+
     // A face ready to load glyphs at this font's size: its own, or a chain
     // face with this font's size made active on it.
     FT_Face activeFace(uint32_t face_number) {
@@ -419,6 +591,10 @@ namespace visage {
     std::map<GlyphKey, PackedGlyph> glyphs_;
     std::map<char32_t, PackedGlyph*> characters_;
     PackedGlyph null_glyph_ = Font::kNullPackedGlyph;
+#if VISAGE_HARFBUZZ
+    std::map<uint32_t, hb_font_t*> hb_fonts_;
+    std::map<std::u32string, ShapedRun> runs_;
+#endif
     bgfx::TextureHandle texture_handle_ = { bgfx::kInvalidHandle };
   };
 
@@ -433,6 +609,22 @@ namespace visage {
 
   const TextRendering& Font::rendering() {
     return textRendering();
+  }
+
+  void Font::setShaping(bool shaping) {
+    shapingState() = shaping && shapingAvailable();
+  }
+
+  bool Font::shaping() {
+    return shapingState();
+  }
+
+  bool Font::shapingAvailable() {
+#if VISAGE_HARFBUZZ
+    return true;
+#else
+    return false;
+#endif
   }
 
   void Font::setFallbackFaces(std::vector<FallbackFace> faces) {
@@ -545,6 +737,11 @@ namespace visage {
       return advance * length;
     }
 
+#if VISAGE_HARFBUZZ
+    if (shapingState())
+      return packed_font_->shapedRun(string, length).width;
+#endif
+
     float width = 0.0f;
     for (int i = 0; i < length; ++i) {
       if (!isNewLine(string[i]) && !isIgnored(string[i]))
@@ -617,6 +814,81 @@ namespace visage {
     }
 
     return line_breaks;
+  }
+
+  void Font::layoutQuads(std::vector<FontAtlasQuad>& quads, const char32_t* text, int length, float x,
+                         float y, float width, float height, Justification justification,
+                         int character_override, bool multi_line) const {
+#if VISAGE_HARFBUZZ
+    if (shapingState() && !character_override) {
+      quads.clear();
+      if (!multi_line) {
+        appendShapedLine(quads, text, length, x, y, width, height, justification);
+        return;
+      }
+
+      // Lines break where the unshaped widths say, then each is shaped.
+      int line_height = nativeLineHeight();
+      std::vector<int> line_breaks = nativeLineBreaks(text, length, width);
+      line_breaks.push_back(length);
+
+      Justification line_justification = kTop;
+      if (justification & kLeft)
+        line_justification = kTopLeft;
+      else if (justification & kRight)
+        line_justification = kTopRight;
+
+      int text_height = line_height * line_breaks.size();
+      int line_y = y + 0.5 * (height - text_height);
+      if (justification & kTop)
+        line_y = y;
+      else if (justification & kBottom)
+        line_y = y + height - text_height;
+
+      int last_break = 0;
+      for (int line_break : line_breaks) {
+        appendShapedLine(quads, text + last_break, line_break - last_break, x, line_y, width, height,
+                         line_justification);
+        last_break = line_break;
+        line_y += line_height;
+      }
+      return;
+    }
+#endif
+
+    quads.resize(std::max(0, length));
+    if (multi_line)
+      setMultiLineVertexPositions(quads.data(), text, length, x, y, width, height, justification);
+    else
+      setVertexPositions(quads.data(), text, length, x, y, width, height, justification, character_override);
+  }
+
+  void Font::appendShapedLine(std::vector<FontAtlasQuad>& quads, const char32_t* text, int length,
+                              float x, float y, float width, float height,
+                              Justification justification) const {
+#if VISAGE_HARFBUZZ
+    if (length <= 0)
+      return;
+
+    const PackedFont::ShapedRun& run = packed_font_->shapedRun(text, length);
+    float pen_x = x + (width - run.width) * 0.5f;
+    float pen_y = y + static_cast<int>((height + nativeCapitalHeight()) * 0.5f);
+
+    if (justification & kLeft)
+      pen_x = x;
+    else if (justification & kRight)
+      pen_x = x + width - run.width;
+
+    if (justification & kTop)
+      pen_y = y + static_cast<int>((nativeCapitalHeight() + nativeLineHeight()) * 0.5f);
+    else if (justification & kBottom)
+      pen_y = y + static_cast<int>(height);
+
+    for (const PackedFont::ShapedGlyph& shaped : run.glyphs) {
+      quads.push_back({ shaped.glyph, pen_x + shaped.x, pen_y + shaped.y,
+                        static_cast<float>(shaped.glyph->width), static_cast<float>(shaped.glyph->height) });
+    }
+#endif
   }
 
   void Font::setMultiLineVertexPositions(FontAtlasQuad* quads, const char32_t* text, int length,

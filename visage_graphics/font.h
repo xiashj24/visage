@@ -111,6 +111,11 @@ namespace visage {
     // Faces tried in order for a character a font lacks, before the emoji
     // face; none by default. Taken by fonts made after it is set.
     static void setFallbackFaces(std::vector<FallbackFace> faces);
+    // Shaping with HarfBuzz, where visage is built with it: off by default,
+    // off taking the unshaped path.
+    static void setShaping(bool shaping);
+    static bool shaping();
+    static bool shapingAvailable();
 
     Font() = default;
     Font(float size, const unsigned char* font_data, int data_size, float dpi_scale = 0.0f);
@@ -156,6 +161,12 @@ namespace visage {
                             float y, float width, float height,
                             Justification justification = kCenter, int character_override = 0) const;
 
+    // One quad per glyph drawn: per character unshaped, per shaped glyph
+    // with shaping on, which can be more or fewer.
+    void layoutQuads(std::vector<FontAtlasQuad>& quads, const char32_t* text, int length, float x,
+                     float y, float width, float height, Justification justification,
+                     int character_override, bool multi_line) const;
+
     void setMultiLineVertexPositions(FontAtlasQuad* quads, const char32_t* text, int length,
                                      float x, float y, float width, float height,
                                      Justification justification = kCenter) const;
@@ -170,6 +181,8 @@ namespace visage {
     float nativeCapitalHeight() const;
     float nativeLowerDipHeight() const;
     std::vector<int> nativeLineBreaks(const char32_t* string, int length, float width) const;
+    void appendShapedLine(std::vector<FontAtlasQuad>& quads, const char32_t* text, int length, float x,
+                          float y, float width, float height, Justification justification) const;
 
     float size_ = 0.0f;
     int native_size_ = 0;

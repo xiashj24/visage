@@ -22,6 +22,7 @@ option(VISAGE_ENABLE_GRAPHICS_DEBUG_LOGGING "Shows graphics debug log in console
 option(VISAGE_ADDRESS_SANITIZER "Enable AddressSanitizer" OFF)
 option(VISAGE_BUILD_SHADERTOOL "Build the offline GLSL -> SPIR-V/MSL compiler" OFF)
 option(VISAGE_SDL_GPU "Render with SDL_GPU (Vulkan/Metal/D3D12) instead of OpenGL" OFF)
+option(VISAGE_ENABLE_HARFBUZZ "Shape text with HarfBuzz, switched on at run time" OFF)
 
 # Linux means the Raspberry Pi / KMSDRM product path, which renders with
 # OpenGL ES 3.0; Windows and macOS simulators use desktop GL core profiles.

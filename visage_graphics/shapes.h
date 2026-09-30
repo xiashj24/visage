@@ -660,12 +660,8 @@ namespace visage {
       float h = height;
       if (direction == Direction::Left || direction == Direction::Right)
         std::swap(w, h);
-      if (text->multiLine())
-        font.setMultiLineVertexPositions(quads.data(), c_str, length, 0, 0, w, h, text->justification());
-      else {
-        font.setVertexPositions(quads.data(), c_str, length, 0, 0, w, h, text->justification(),
-                                text->characterOverride());
-      }
+      font.layoutQuads(quads, c_str, length, 0, 0, w, h, text->justification(), text->characterOverride(),
+                       text->multiLine());
 
       if (direction == Direction::Down) {
         for (auto& quad : quads) {
