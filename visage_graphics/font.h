@@ -180,6 +180,8 @@ namespace visage {
     int nativeLineHeight() const;
     float nativeCapitalHeight() const;
     float nativeLowerDipHeight() const;
+    // The same face at another size or scale, under the key it was made with.
+    Font(float size, const PackedFont* face, float dpi_scale);
     std::vector<int> nativeLineBreaks(const char32_t* string, int length, float width) const;
     void appendShapedLine(std::vector<FontAtlasQuad>& quads, const char32_t* text, int length, float x,
                           float y, float width, float height, Justification justification) const;
@@ -222,13 +224,14 @@ namespace visage {
     }
 
     static PackedFont* loadPackedFont(int size, const EmbeddedFile& font) {
-      std::string id = "embed: " + std::string(font.name) + " - " + std::to_string(size);
-      return instance()->createOrLoadPackedFont(id, size, font.data, font.size);
+      return instance()->createOrLoadPackedFont("embed: " + std::string(font.name), size, font.data,
+                                                font.size);
     }
 
     static PackedFont* loadPackedFont(int size, const std::string& file_path);
     static PackedFont* loadPackedFont(const PackedFont* packed_font);
     static PackedFont* loadPackedFont(int size, const unsigned char* font_data, int data_size);
+    static PackedFont* loadPackedFont(int size, const PackedFont* face);
 
     static void returnPackedFont(PackedFont* packed_font) {
       instance()->decrementPackedFont(packed_font);
@@ -237,7 +240,7 @@ namespace visage {
     FontCache();
 
     PackedFont* incrementPackedFont(const std::string& id);
-    PackedFont* createOrLoadPackedFont(const std::string& face_id, int size,
+    PackedFont* createOrLoadPackedFont(const std::string& face_key, int size,
                                        const unsigned char* font_data, int data_size);
     void decrementPackedFont(PackedFont* packed_font);
     void removeStaleFonts();
